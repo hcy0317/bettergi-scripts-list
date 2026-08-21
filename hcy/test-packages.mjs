@@ -16,6 +16,8 @@ const targetFolders = new Set();
 for (const entry of mappings.packages) {
     assert.match(entry.targetFolder, /^HCY-/);
     assert.notEqual(entry.sourceFolder, entry.targetFolder);
+    assert.equal(typeof entry.preserveFromFolder, "string");
+    assert(Array.isArray(entry.preserveFiles));
     assert(!targetFolders.has(entry.targetFolder), `duplicate target: ${entry.targetFolder}`);
     targetFolders.add(entry.targetFolder);
 
