@@ -1023,7 +1023,11 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 state.cancel = true;
             }
             success = false;
-            break;
+            if (state.cancel) {
+                return;
+            }
+            log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
+            continue;
         }
         if (pathInfo.ok) {
             await genshin.returnMainUi();
@@ -1220,11 +1224,14 @@ async function runPath(fullPath, targetItemPath = null) {
 
     /* ---------- 主任务 ---------- */
     const pathingTask = (async () => {
-        log.info(`开始执行路线: ${fullPath}`);
-        await fakeLog(fullPath, false, true, 0);
-        await pathingScript.runFile(fullPath);
-        await fakeLog(fullPath, false, false, 0);
-        state.running = false;
+        try {
+            log.info(`开始执行路线: ${fullPath}`);
+            await fakeLog(fullPath, false, true, 0);
+            await pathingScript.runFile(fullPath);
+            await fakeLog(fullPath, false, false, 0);
+        } finally {
+            state.running = false;
+        }
     })();
 
     /* ---------- 伴随任务 ---------- */
@@ -1252,7 +1259,10 @@ async function runPath(fullPath, targetItemPath = null) {
     })();
 
     /* ---------- 并发等待 ---------- */
-    await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+    const [pathingResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+    if (pathingResult.status === "rejected") {
+        throw pathingResult.reason;
+    }
 }
 
 //加载拾取物图片

@@ -1,6 +1,30 @@
 const COMPLETED_TASKS_FILE = "./completed_tasks.json";
 let skipCheckStamina = 1;//为0时跳过检查体力
 let messageBuffer = '';
+const taskFailures = [];
+
+function errorToText(error) {
+    if (error && error.message) return error.message;
+    return String(error);
+}
+
+function recordTaskFailure(taskName, error) {
+    const text = errorToText(error);
+    const message = `${taskName}: ${text}`;
+    taskFailures.push(message);
+    log.error(message);
+}
+
+function recordTaskIncomplete(taskName, reason) {
+    const text = errorToText(reason);
+    log.warn(`${taskName}: ${text}`);
+}
+
+function throwIfTaskFailures() {
+    if (taskFailures.length > 0) {
+        throw new Error(`角色养成一条龙存在未完成任务：${taskFailures.join('；')}`);
+    }
+}
 // 累积消息函数
 function addNotification(message) {
     messageBuffer += message + '\n';
@@ -441,33 +465,40 @@ function positiveIntegerJudgment(testNumber) {
 }
 
 async function queryStaminaValue() {
-    try {
-        await genshin.returnMainUi();
-        await sleep(2500);
-        keyPress("F1"); 
-        await sleep(1800);
-        click(300, 540);
-        await sleep(500);
-        click(1570, 203);
-        await sleep(800);
-        let captureRegion = captureGameRegion();
-        let stamina = captureRegion.find(RecognitionObject.ocr(1580, 20, 210, 55));
-        captureRegion.dispose();
-        log.info(`OCR原始文本：${stamina.text}`);
-        const staminaText = stamina.text.replace(/\s/g, ''); // 移除所有空格
-         const standardMatch = staminaText.match(/(\d+)/);
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            await genshin.returnMainUi();
+            await sleep(2500);
+            keyPress("F1");
+            await sleep(1800);
+            click(300, 540);
+            await sleep(500);
+            click(1570, 203);
+            await sleep(800);
+            let captureRegion = captureGameRegion();
+            let stamina = captureRegion.find(RecognitionObject.ocr(1580, 20, 210, 55));
+            captureRegion.dispose();
+            log.info(`OCR原始文本：${stamina.text}`);
+            const staminaText = stamina.text.replace(/\s/g, ''); // 移除所有空格
+            const standardMatch = staminaText.match(/(\d+)/);
             if (standardMatch) {
                 const currentValue = standardMatch[1];
                 let validatedStamina = positiveIntegerJudgment(currentValue);
-                if (validatedStamina > 11200) validatedStamina = (validatedStamina-1200)/10000;
-           log.info(`返回体力值：${validatedStamina}`);
-           return validatedStamina;
+                if (validatedStamina > 11200) validatedStamina = (validatedStamina - 1200) / 10000;
+                log.info(`返回体力值：${validatedStamina}`);
+                return validatedStamina;
             }
-    } catch (error) {
-        log.error(`体力识别失败：${error.message}，默认为零`);
+            lastError = new Error(`未识别到有效体力数字：${stamina.text}`);
+            log.warn(`体力识别第${attempt}次失败：${lastError.message}`);
+        } catch (error) {
+            lastError = error;
+            log.warn(`体力识别第${attempt}次失败：${error.message}`);
+        }
         await genshin.returnMainUi();
-        return 0;
-    }      
+        await sleep(800);
+    }
+    throw new Error(`体力识别失败：${lastError ? lastError.message : "未知错误"}`);
 }
 
 //检测传送结束  await tpEndDetection();
@@ -682,8 +713,80 @@ async function findImageAndOCR(imagePath, ocrWidth, ocrHeight, offsetX, offsetY)
 }
 
 
-//前往刷天赋书或者武器(必须保证在材料介绍页面)await gotoAutoDomain(imageName = "weaponDomain");
-async function gotoAutoDomain(imageName = "bookDomain") {
+const materialDomainNameByMaterial = {
+    "自由": "忘却之峡",
+    "抗争": "忘却之峡",
+    "诗文": "忘却之峡",
+    "繁荣": "太山府",
+    "勤劳": "太山府",
+    "黄金": "太山府",
+    "浮世": "堇色之庭",
+    "风雅": "堇色之庭",
+    "天光": "堇色之庭",
+    "净言": "昏识塔",
+    "诤言": "昏识塔",
+    "巧思": "昏识塔",
+    "笃行": "昏识塔",
+    "公平": "苍白的遗荣",
+    "正义": "苍白的遗荣",
+    "秩序": "苍白的遗荣",
+    "角逐": "蕴火的幽墟",
+    "焚燔": "蕴火的幽墟",
+    "纷争": "蕴火的幽墟",
+    "月光": "无光的深都",
+    "乐园": "无光的深都",
+    "浪迹": "无光的深都",
+    "高塔孤王": "塞西莉亚苗圃",
+    "凛风奔狼": "塞西莉亚苗圃",
+    "狮牙斗士": "塞西莉亚苗圃",
+    "孤云寒林": "震雷连山密宫",
+    "雾海云间": "震雷连山密宫",
+    "漆黑陨铁": "震雷连山密宫",
+    "远海夷地": "砂流之庭",
+    "鸣神御灵": "砂流之庭",
+    "今昔剧话": "砂流之庭",
+    "今昔剧画": "砂流之庭",
+    "谧林涓露": "有顶塔",
+    "绿洲花园": "有顶塔",
+    "烈日威权": "有顶塔",
+    "幽谷弦音": "深潮的余响",
+    "悠古弦音": "深潮的余响",
+    "纯圣露滴": "深潮的余响",
+    "无垢之海": "深潮的余响",
+    "贡祭炽心": "深古瞭望所",
+    "谵妄圣主": "深古瞭望所",
+    "神合秘烟": "深古瞭望所",
+    "奇巧秘器": "失落的月庭",
+    "长夜燧火": "失落的月庭",
+    "终北遗嗣": "失落的月庭"
+};
+
+const combatStrategyNameByTeam = {
+    "草行久钟": "种门（草行久钟）"
+};
+
+function getMaterialDomainName(materialName) {
+    const normalizedMaterialName = (materialName || "").toString().trim();
+    const domainName = materialDomainNameByMaterial[normalizedMaterialName];
+    if (!domainName) {
+        throw new Error(`未配置材料"${normalizedMaterialName}"对应的秘境，避免误刷已停止`);
+    }
+    return domainName;
+}
+
+function getCombatStrategyName(teamName) {
+    const normalizedTeamName = (teamName || "").toString().trim();
+    return combatStrategyNameByTeam[normalizedTeamName] || "";
+}
+
+function canAttemptMaterialDomain(originalResin) {
+    if (originalResin >= 20) return true;
+    log.info(`原粹树脂不足20，仍尝试自动秘境以使用浓缩树脂；若浓缩树脂也不足，自动秘境会返回失败`);
+    return true;
+}
+
+//前往刷天赋书或者武器(必须保证在材料介绍页面)await gotoAutoDomain(imageName = "weaponDomain", materialName);
+async function gotoAutoDomain(imageName = "bookDomain", materialName) {
 await sleep(1000);
 
  //拖动操作，避免文本描述太长，导致副本传送图标消失
@@ -699,30 +802,25 @@ await sleep(500);
 moveMouseTo(50, 50);//移动鼠标到左上角，避免检测失败
 await sleep(400);
     
+const domainName = getMaterialDomainName(materialName);
 await waitAndClickImage(imageName);
     try {
- await repeatOperationUntilTextFound({x: 1640,y: 960,width: 200,height: 100,targetText: "传送",stepDuration: 0, maxSteps:25, waitTime:100,ifClick: true});//用来等待点击文字,10s等待
+ await repeatOperationUntilTextFound({x: 1640,y: 960,width: 200,height: 100,targetText: "传送",stepDuration: 0, maxSteps:25, waitTime:100,ifClick: false});//只确认秘境今日开放，不点击传送
     } catch (error) {
      log.info("秘境未开启");
      await genshin.returnMainUi();
      throw new Error(`秘境未在开启时间，跳过执行`);
  } 
-log.info("开始前往天赋本秘境");
-await sleep(1000);
-await tpEndDetection();
-await sleep(3000);//枫丹天赋材料本门口有水晶碟，可能影响
-await repeatOperationUntilTextFound();
-keyPress("F");
-await dispatcher.runTask(new SoloTask("AutoDomain", {  SpecifyResinUse: true,  
-// 原粹树脂刷取次数  
-OriginalResinUseCount: 1,   
-// 浓缩树脂刷取次数    
-CondensedResinUseCount: 0,  
-// 须臾树脂刷取次数  
-TransientResinUseCount: 0,   
-// 脆弱树脂刷取次数  
-FragileResinUseCount: 0  
-}));
+log.info(`${domainName}秘境今日可传送，交由自动秘境前往并挑战`);
+await genshin.returnMainUi();
+if(!settings.teamName) throw new Error('未输入队伍名称');
+let taskParam = new AutoDomainParam(0);
+taskParam.DomainName = getMaterialDomainName(materialName);
+taskParam.PartyName = settings.teamName;
+taskParam.CombatStrategyPath = taskParam.SetCombatStrategyPath(getCombatStrategyName(settings.teamName));
+taskParam.SpecifyResinUse = false;
+taskParam.SetResinPriorityList("浓缩树脂", "原粹树脂40", "原粹树脂20");
+await dispatcher.RunAutoDomainTask(taskParam);
 }
 // 技能书与国家、行列位置的映射
 const bookToPosition = {
@@ -989,14 +1087,24 @@ let afterStamina = 0;
 let res = 9999999;
 if(skipCheckStamina)afterStamina = await queryStaminaValue();
 if(afterStamina< 20) skipCheckStamina = 0;
-    if ( afterStamina >= 20 ){       
+    if ( canAttemptMaterialDomain(afterStamina) ){       
              try {
              log.info(`体力充足，开始检测物品数量`);
              let bookCounts = await getMaterialCount(materialName);
              res = 0.12*(bookRequireCounts[0]-bookCounts[0])+0.36*(bookRequireCounts[1]-bookCounts[1])+(bookRequireCounts[2]-bookCounts[2]);
              if(res>0){
               log.info(`${materialName}天赋书大约还差${res.toFixed(2)}本紫色品质没有刷取`);
-              await gotoAutoDomain();
+              await gotoAutoDomain("bookDomain", materialName);
+               bookCounts = await getMaterialCount(materialName);
+               res = 0.12*(bookRequireCounts[0]-bookCounts[0])+0.36*(bookRequireCounts[1]-bookCounts[1])+(bookRequireCounts[2]-bookCounts[2]);
+               if(res <= 0){
+               addNotification(`${materialName}天赋书数量已经满足要求！！！`);
+               await addCompletedTask("talent", materialName, bookRequireCounts);
+               } else {
+               addNotification(`${materialName}天赋书大约还差${res.toFixed(2)}本紫色品质没有刷取`);
+               recordTaskIncomplete(`${materialName}天赋书`, `树脂耗尽或未完成，仍缺${res.toFixed(2)}本紫色品质`);
+               }
+               return;
              } 
              else {
              addNotification(`${materialName}天赋书数量已经满足要求！！！`);
@@ -1006,6 +1114,7 @@ if(afterStamina< 20) skipCheckStamina = 0;
              }
              catch (error) {  
              notification.send(`${materialName}天赋书刷取失败，错误信息: ${error}`);
+              recordTaskFailure(`${materialName}天赋书`, error);
              await genshin.tp(2297.6201171875,-824.5869140625);//传送到神像回血
              if (error.message != '秘境未在开启时间，跳过执行'){
              let bookCounts = await getMaterialCount(materialName);
@@ -1023,8 +1132,10 @@ if(afterStamina< 20) skipCheckStamina = 0;
              await addCompletedTask("talent", materialName, bookRequireCounts);
              addNotification(`${materialName}天赋书数量已经满足要求！！！`);
              } 
-             else addNotification(`${materialName}天赋书大约还差${res.toFixed(2)}本紫色品质没有刷取`);
-             return;
+             else {
+              addNotification(`${materialName}天赋书大约还差${res.toFixed(2)}本紫色品质没有刷取`);
+              recordTaskIncomplete(`${materialName}天赋书`, `体力不足或未完成，仍缺${res.toFixed(2)}本紫色品质`);
+              }return;
          }
 }
 }
@@ -1037,14 +1148,24 @@ let afterStamina = 0;
 let res = 99999999;
 if(skipCheckStamina)afterStamina = await queryStaminaValue();
 if(afterStamina< 20) skipCheckStamina = 0;
-    if ( afterStamina >= 20 ){       
+    if ( canAttemptMaterialDomain(afterStamina) ){       
              try {
              log.info(`体力充足，开始检测物品数量`);
              let weaponCounts = await getWeaponMaterialCount(materialName);
              res = 0.12*(weaponRequireCounts[0]-weaponCounts.green)+0.36*(weaponRequireCounts[1]-weaponCounts.blue)+(weaponRequireCounts[2]-weaponCounts.purple)+3*(weaponRequireCounts[3]-weaponCounts.gold);
              if(res>0){
               log.info(`武器材料${materialName}大约还差${res.toFixed(2)}个紫色品质没有刷取`);
-              await gotoAutoDomain("weaponDomain");
+              await gotoAutoDomain("weaponDomain", materialName);
+               weaponCounts = await getWeaponMaterialCount(materialName);
+               res = 0.12*(weaponRequireCounts[0]-weaponCounts.green)+0.36*(weaponRequireCounts[1]-weaponCounts.blue)+(weaponRequireCounts[2]-weaponCounts.purple)+3*(weaponRequireCounts[3]-weaponCounts.gold);
+               if(res <= 0){
+               addNotification(`武器材料${materialName}数量已经满足要求！！！`);
+               await addCompletedTask("wepon", materialName, weaponRequireCounts);
+               } else {
+               addNotification(`武器材料${materialName}大约还差${res.toFixed(2)}个紫色品质没有刷取`);
+               recordTaskIncomplete(`武器材料${materialName}`, `树脂耗尽或未完成，仍缺${res.toFixed(2)}个紫色品质`);
+               }
+               return;
              } 
              else {
              addNotification(`武器材料${materialName}数量已经满足要求！！！`);
@@ -1054,6 +1175,7 @@ if(afterStamina< 20) skipCheckStamina = 0;
              }
              catch (error) {  
              addNotification(`武器材料${materialName}刷取失败，错误信息: ${error}`);
+              recordTaskFailure(`武器材料${materialName}`, error);
              await genshin.tp(2297.6201171875,-824.5869140625);//传送到神像回血
              if (error.message != '秘境未在开启时间，跳过执行'){
              const weaponCounts = await getWeaponMaterialCount(materialName);
@@ -1071,10 +1193,39 @@ if(afterStamina< 20) skipCheckStamina = 0;
              await addCompletedTask("wepon", materialName, weaponRequireCounts);
              addNotification(`武器材料${materialName}数量已经满足要求！！！`);
              } 
-             else addNotification(`武器材料${materialName}大约还差${res.toFixed(2)}个紫色品质没有刷取`);
-             return;
+             else {
+              addNotification(`武器材料${materialName}大约还差${res.toFixed(2)}个紫色品质没有刷取`);
+              recordTaskIncomplete(`武器材料${materialName}`, `体力不足或未完成，仍缺${res.toFixed(2)}个紫色品质`);
+              }return;
          }
 }
+}
+
+async function runBossPathingOrThrow(path) {
+    const raw = file.readTextSync(path);
+    if (typeof raw !== "string" || raw.trim() === "") {
+        throw new Error(`首领路线读取失败：${path}`);
+    }
+
+    const route = JSON.parse(raw);
+    const positions = Array.isArray(route.positions) ? route.positions : [];
+    const teleportIndex = positions.findIndex(point =>
+        point?.type === "teleport" &&
+        Number.isFinite(Number(point.x)) &&
+        Number.isFinite(Number(point.y))
+    );
+    if (teleportIndex < 0) {
+        throw new Error(`首领路线缺少有效传送点：${path}`);
+    }
+
+    const teleportPoint = positions[teleportIndex];
+    const mapName = route.map_name || route.mapName || "Teyvat";
+    await genshin.tp(teleportPoint.x, teleportPoint.y, mapName, true);
+
+    route.positions = positions.filter((_, index) => index !== teleportIndex);
+    if (route.positions.length > 0) {
+        await pathingScript.run(JSON.stringify(route));
+    }
 }
 
 //去刷boss材料
@@ -1098,7 +1249,7 @@ if(afterStamina< 20) skipCheckStamina = 0;
                      if(settings.energyMax) await restoredEnergy();
                      else await genshin.tp(2297.6201171875,-824.5869140625);//传送到神像回血
                      log.info(`前往讨伐${bossName}`);
-                     await pathingScript.runFile(`assets/goToBoss/${bossName}前往.json`);
+                     await runBossPathingOrThrow(`assets/goToBoss/${bossName}前往.json`);
                  	 if(bossName=="超重型陆巡舰·机动战垒"){
 					 keyDown("w");
 					 await sleep(16000);
@@ -1112,7 +1263,7 @@ if(afterStamina< 20) skipCheckStamina = 0;
                          //失败后最多只挑战一次，因为两次都打不过，基本上没戏，干脆直接报错结束
                          log.info(`挑战失败，再来一次`);
                          await genshin.tp(2297.6201171875,-824.5869140625);//传送到神像回血
-                         await pathingScript.runFile(`assets/goToBoss/${bossName}前往.json`);
+                         await runBossPathingOrThrow(`assets/goToBoss/${bossName}前往.json`);
                          if(bossName=="超重型陆巡舰·机动战垒"){
 					     keyDown("w");
 					     await sleep(16000);
@@ -1142,6 +1293,7 @@ if(afterStamina< 20) skipCheckStamina = 0;
              }
              catch (error) {  
              addNotification(`${bossName}刷取失败，错误信息: ${error}`);
+              recordTaskFailure(`${bossName}首领材料`, error);
              await genshin.tp(2297.6201171875,-824.5869140625);//传送到神像回血
              return;
              }
@@ -1150,8 +1302,10 @@ if(afterStamina< 20) skipCheckStamina = 0;
              log.info(`体力值为${afterStamina},可能无法刷取首领材料${bossName}`);
              const bossCounts = await getBossMaterialCount(bossName);
              let res = bossRequireCounts-bossCounts;
-             if(res>0) addNotification(`${bossName}还差${res}个材料没有刷取`);
-             else {
+             if(res>0) {
+                      addNotification(`${bossName}还差${res}个材料没有刷取`);
+                      recordTaskIncomplete(`${bossName}首领材料`, `体力不足或未完成，仍缺${res}个材料`);
+               }else {
                      addNotification(`${bossName}材料数量已经满足要求！！！`);
                      await addCompletedTask("boss", bossName, bossRequireCounts);
              }
@@ -1212,7 +1366,8 @@ else await getTalentBook(talentBookName,bookRequireCounts);
 // 刷取完成后标记为完成
 //await addCompletedTask("talent", talentBookName, bookRequireCounts);
 }
-catch (error) {  notification.send(`天赋书${talentBookName}刷取失败，错误信息: ${error}`);}
+catch (error) {  notification.send(`天赋书${talentBookName}刷取失败，错误信息: ${error}`);
+  recordTaskFailure(`天赋书${talentBookName}`, error);}
 }
 else log.info(`没有选择刷取天赋书${i+1}，跳过执行`);
 }
@@ -1228,7 +1383,8 @@ const isCompleted = await isTaskCompleted("wepon", weaponName, weaponRequireCoun
 if (isCompleted){addNotification(`武器材料${weaponName} 已刷取至目标数量，跳过执行`);} 
 else await getWeaponMaterial(weaponName,weaponRequireCounts);
 }
-catch (error) {  notification.send(`武器材料${weaponName}刷取失败，错误信息: ${error}`);}
+catch (error) {  notification.send(`武器材料${weaponName}刷取失败，错误信息: ${error}`);
+  recordTaskFailure(`武器材料${weaponName}`, error);}
 }
 else log.info(`没有选择刷取武器材料${i+1}，跳过执行`);
 }
@@ -1242,12 +1398,14 @@ const isCompleted = await isTaskCompleted("boss", bossName, bossRequireCounts);
 if (isCompleted){addNotification(`首领材料${bossName} 已刷取至目标数量，跳过执行`);} 
 else await getBossMaterial(bossName,bossRequireCounts);
 }
-catch (error) {  notification.send(`首领材料${bossName}刷取失败，错误信息: ${error}`);}
+catch (error) {  notification.send(`首领材料${bossName}刷取失败，错误信息: ${error}`);
+  recordTaskFailure(`首领材料${bossName}`, error);}
 }
 else log.info(`没有选择挑战首领${i+1}，跳过执行`);
 }
 
 sendBufferedNotifications();//发送累积的完成信息
+throwIfTaskFailures();
 
 })();
 

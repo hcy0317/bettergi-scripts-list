@@ -337,7 +337,7 @@ function parseField(field, min, max) {
 }
 
 
-this.cronUtil = {
+globalThis.cronUtil = {
     getNextCronTimestamp,
     getNextCronTimestampAll
 }

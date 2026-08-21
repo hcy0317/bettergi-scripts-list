@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "packages": [
+    {
+      "sourceFolder": "AutoCommissionNova",
+      "targetFolder": "HCY-AutoCommission",
+      "revision": 1,
+      "requiredMarkers": [
+        {
+          "file": "src/core/main-process.js",
+          "text": "function validateRecognitionSnapshot(commissions)"
+        },
+        {
+          "file": "src/core/commission-executor.js",
+          "text": "completedCount + successCount === allCommissions.length"
+        }
+      ]
+    },
+    {
+      "sourceFolder": "FullyAutoAndSemiAutoTools",
+      "targetFolder": "HCY-FullyAutoAndSemiAutoTools",
+      "revision": 1,
+      "requiredMarkers": [
+        {
+          "file": "main.js",
+          "text": "pathingScript.isCancellationRequested"
+        },
+        {
+          "file": "utils/startup.js",
+          "text": "export function normalizeUid(value)"
+        }
+      ]
+    },
+    {
+      "sourceFolder": "角色养成一条龙",
+      "targetFolder": "HCY-角色养成一条龙",
+      "revision": 1,
+      "requiredMarkers": [
+        {
+          "file": "main.js",
+          "text": "function throwIfTaskFailures()"
+        }
+      ]
+    },
+    {
+      "sourceFolder": "AAA-Artifacts-Bulk-Supply",
+      "targetFolder": "HCY-AAA-Artifacts-Bulk-Supply",
+      "revision": 1,
+      "requiredMarkers": [
+        {
+          "file": "main.js",
+          "text": "const [pathingResult] = await Promise.allSettled"
+        }
+      ]
+    }
+  ]
+}

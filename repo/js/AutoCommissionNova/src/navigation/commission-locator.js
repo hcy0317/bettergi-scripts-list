@@ -7,6 +7,33 @@ import { OCR_REGIONS } from "../config/index.js";
 import { enterCommissionScreen } from "../vision/index.js";
 import { findCommissionIndex, getCommissionPosition, clickCommissionAndOpenMap } from "../recognition/index.js";
 
+const backgroundInput = new PostMessage();
+
+function tryPhysicalInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function clickTrackingInBothModes() {
+    const messageSent = backgroundInput.clickFocused(1693, 1000);
+    const physicalSent = tryPhysicalInput(() => click(1693, 1000));
+    if (!messageSent && !physicalSent) {
+        throw new Error("无法向游戏窗口发送追踪点击");
+    }
+}
+
+function closeMapInBothModes() {
+    const messageSent = backgroundInput.keyPressFocused("VK_ESCAPE");
+    const physicalSent = tryPhysicalInput(() => keyPress("VK_ESCAPE"));
+    if (!messageSent && !physicalSent) {
+        throw new Error("无法向游戏窗口发送关闭地图按键");
+    }
+}
+
 /**
  * 寻找委托目标位置并追踪
  * @param {string} commissionName - 委托名称
@@ -30,8 +57,8 @@ export async function findCommissionTarget(commissionName) {
 
         await clickCommissionAndOpenMap(page, foundIndex);
 
-        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(() => click(1693, 1000)).waitFor();
-        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(() => keyPress("VK_ESCAPE")).waitForDisappear();
+        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(clickTrackingInBothModes).waitFor();
+        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(closeMapInBothModes).waitForDisappear();
 
         currentCommissionPosition = await getCommissionPosition();
         await genshin.returnMainUi();
@@ -67,8 +94,8 @@ export async function trackCommission(commissionName) {
 
         await clickCommissionAndOpenMap(page, foundIndex);
 
-        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(() => click(1693, 1000)).waitFor();
-        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(() => keyPress("VK_ESCAPE")).waitForDisappear();
+        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(clickTrackingInBothModes).waitFor();
+        await page.locator("停止追踪", OCR_REGIONS.COMMISSION_TRACKING).withRetryInterval(1000).withRetryAction(closeMapInBothModes).waitForDisappear();
 
         await genshin.returnMainUi();
 
