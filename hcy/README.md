@@ -63,3 +63,18 @@ $backupRoot = Join-Path $betterGIRoot '.codex-backups\script-updates'
 ```
 
 `Update-BetterGIInstallation.ps1` 以官方快照重建规范包，只从旧目录复制清单声明的 `saved_files`；HCY 包从旧包迁移显式列出的状态文件。未声明的陈旧源码不会混入新包。
+
+## HDR 启动器
+
+`hcy\launcher` 保存本机 HDR 启动入口的可追踪源码。安装脚本默认只比较 SHA-256；显式传入 `-Apply` 才覆盖 BetterGI 根目录中的两个入口文件。
+
+```powershell
+& .\hcy\Install-BetterGIHdrLauncher.ps1 `
+    -BetterGIRoot 'C:\Users\hcy\Programs\Genshin Tools\BetterGI'
+
+& .\hcy\Install-BetterGIHdrLauncher.ps1 `
+    -BetterGIRoot 'C:\Users\hcy\Programs\Genshin Tools\BetterGI' `
+    -Apply
+```
+
+启动器会复用当前会话中已有的 BetterGI 实例，并等待主窗口可响应后再尝试置前。`--check` 不修改 `User\config.json`，也不启动或停止 BetterGI。
