@@ -16,8 +16,17 @@ function tryPhysicalInput(action) {
     }
 }
 
+function tryBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 function pressKeyInBothModes(key) {
-    const messageSent = backgroundInput.keyPressFocused(key);
+    const messageSent = tryBackgroundInput(() => backgroundInput.keyPress(key));
     const physicalSent = tryPhysicalInput(() => keyPress(key));
     if (!messageSent && !physicalSent) {
         throw new Error(`无法向游戏窗口发送按键: ${key}`);
@@ -25,9 +34,8 @@ function pressKeyInBothModes(key) {
 }
 
 function clickInBothModes(x, y) {
-    const messageSent = backgroundInput.clickFocused(x, y);
-    tryPhysicalInput(() => click(x, y));
-    if (!messageSent) {
+    const physicalSent = tryPhysicalInput(() => click(x, y));
+    if (!physicalSent) {
         throw new Error(`无法向游戏窗口发送点击: ${x}, ${y}`);
     }
 }
@@ -128,7 +136,6 @@ export async function pageScroll(scrollCount) {
         const totalDistance = 200;
         const stepDistance = 10;
         for (let i = 0; i < scrollCount; ++i) {
-            backgroundInput.activateWindow();
             moveMouseTo(clickX, clickY);
             await sleep(300);
             for (let j = 0; j < 4; j++) {

@@ -20,7 +20,7 @@
         "Data/account-state.json"
       ],
       "preserveSettingDefaults": [],
-      "revision": 1,
+      "revision": 2,
       "requiredMarkers": [
         {
           "file": "src/core/main-process.js",

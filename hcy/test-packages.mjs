@@ -36,6 +36,19 @@ for (const entry of mappings.packages) {
             `${entry.sourceFolder}/${marker.file} is missing: ${marker.text}`,
         );
     }
+
+    const javascriptFiles = fs
+        .readdirSync(packageRoot, { recursive: true, withFileTypes: true })
+        .filter((item) => item.isFile() && item.name.endsWith(".js"));
+    for (const file of javascriptFiles) {
+        const source = fs.readFileSync(path.join(file.parentPath, file.name), "utf8");
+        for (const unsupportedApi of ["keyPressFocused", "clickFocused", "activateWindow"]) {
+            assert(
+                !source.includes(`.${unsupportedApi}(`),
+                `${path.relative(repoRoot, path.join(file.parentPath, file.name))} uses unsupported BetterGI API: ${unsupportedApi}`,
+            );
+        }
+    }
 }
 
 console.log("HCY compatibility package contracts passed");
