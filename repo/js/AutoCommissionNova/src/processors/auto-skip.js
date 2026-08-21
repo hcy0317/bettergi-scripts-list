@@ -21,8 +21,17 @@ function tryPhysicalInput(action) {
     }
 }
 
+function tryBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 function pressKeyInBothModes(key) {
-    const messageSent = backgroundInput.keyPressFocused(key);
+    const messageSent = tryBackgroundInput(() => backgroundInput.keyPress(key));
     const physicalSent = tryPhysicalInput(() => keyPress(key));
     if (!messageSent && !physicalSent) {
         throw new Error(`无法向游戏窗口发送按键: ${key}`);
@@ -40,11 +49,8 @@ function keyUpInBothModes(key) {
 }
 
 function clickRegionInBothModes(region) {
-    const messageSent = backgroundInput.clickFocused(
-        Math.round(region.x + region.width / 2),
-        Math.round(region.y + region.height / 2));
     const physicalSent = tryPhysicalInput(() => region.click());
-    if (!messageSent && !physicalSent) {
+    if (!physicalSent) {
         throw new Error("无法向游戏窗口发送对话点击");
     }
 }

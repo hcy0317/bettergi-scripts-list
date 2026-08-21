@@ -20,8 +20,18 @@ function tryRecognizerPhysicalInput(action) {
     }
 }
 
+function tryRecognizerBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 function pressEscapeInBothModes() {
-    const messageSent = recognizerBackgroundInput.keyPressFocused("VK_ESCAPE");
+    const messageSent = tryRecognizerBackgroundInput(
+        () => recognizerBackgroundInput.keyPress("VK_ESCAPE"));
     const physicalSent = tryRecognizerPhysicalInput(() => keyPress("VK_ESCAPE"));
     if (!messageSent && !physicalSent) {
         throw new Error("无法向游戏窗口发送关闭详情页按键");

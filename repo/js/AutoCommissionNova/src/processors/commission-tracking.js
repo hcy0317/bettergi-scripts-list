@@ -24,8 +24,17 @@ function tryPhysicalInput(action) {
     }
 }
 
+function tryBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 function pressKeyInBothModes(key) {
-    const messageSent = backgroundInput.keyPressFocused(key);
+    const messageSent = tryBackgroundInput(() => backgroundInput.keyPress(key));
     const physicalSent = tryPhysicalInput(() => keyPress(key));
     if (!messageSent && !physicalSent) {
         throw new Error(`无法向游戏窗口发送按键: ${key}`);
@@ -120,10 +129,9 @@ async function clickMatchedNpcFromOcr(targetText) {
         keyDownInBothModes("VK_MENU");
         try {
             await sleep(200);
-            backgroundInput.clickFocused(
-                Math.round(item.x + item.width / 2),
-                Math.round(item.y + item.height / 2));
-            tryPhysicalInput(() => item.click());
+            if (!tryPhysicalInput(() => item.click())) {
+                throw new Error("无法向游戏窗口发送目标交互点击");
+            }
             await sleep(100);
             leftButtonClick();
         } finally {

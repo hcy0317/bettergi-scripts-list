@@ -145,9 +145,8 @@ export async function getCommissionPosition() {
 export async function clickCommissionAndOpenMap(page, index) {
     const button = COMMISSION_POSITIONING_BUTTONS[index];
     await page.locator(RO.track).withRetryAction(async () => {
-        const messageSent = backgroundInput.clickFocused(button.x, button.y);
         const physicalSent = tryPhysicalInput(() => click(button.x, button.y));
-        if (!messageSent && !physicalSent) {
+        if (!physicalSent) {
             throw new Error("无法向游戏窗口发送定位点击");
         }
         await sleep(1500); // 打开大地图跳转有些微延迟

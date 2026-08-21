@@ -18,16 +18,24 @@ function tryPhysicalInput(action) {
     }
 }
 
+function tryBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 function clickTrackingInBothModes() {
-    const messageSent = backgroundInput.clickFocused(1693, 1000);
     const physicalSent = tryPhysicalInput(() => click(1693, 1000));
-    if (!messageSent && !physicalSent) {
+    if (!physicalSent) {
         throw new Error("无法向游戏窗口发送追踪点击");
     }
 }
 
 function closeMapInBothModes() {
-    const messageSent = backgroundInput.keyPressFocused("VK_ESCAPE");
+    const messageSent = tryBackgroundInput(() => backgroundInput.keyPress("VK_ESCAPE"));
     const physicalSent = tryPhysicalInput(() => keyPress("VK_ESCAPE"));
     if (!messageSent && !physicalSent) {
         throw new Error("无法向游戏窗口发送关闭地图按键");
