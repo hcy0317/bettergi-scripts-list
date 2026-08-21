@@ -11,9 +11,12 @@ try {
     $backupRoot = Join-Path $fixtureRoot 'backup'
     $officialPackage = Join-Path $officialRoot 'Alpha'
     $installedPackage = Join-Path $installRoot 'User\JsScript\Alpha'
+    $officialAutoCode = Join-Path $officialRoot 'AutoCode'
+    $installedAutoCode = Join-Path $installRoot 'User\JsScript\AutoCode'
 
     New-Item -ItemType Directory -Path (Join-Path $officialPackage 'state') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $installedPackage 'state') -Force | Out-Null
+    New-Item -ItemType Directory -Path $officialAutoCode,$installedAutoCode -Force | Out-Null
 
     Set-Content -LiteralPath (Join-Path $officialPackage 'manifest.json') -Encoding UTF8 -Value @'
 {
@@ -37,9 +40,16 @@ try {
     Set-Content -LiteralPath (Join-Path $installedPackage 'main.js') -Encoding UTF8 -Value 'const version = 1;'
     Set-Content -LiteralPath (Join-Path $installedPackage 'state\default.json') -Encoding UTF8 -Value '{"value":"user"}'
     Set-Content -LiteralPath (Join-Path $installedPackage 'stale.js') -Encoding UTF8 -Value 'throw new Error("stale");'
+    Set-Content -LiteralPath (Join-Path $officialAutoCode 'manifest.json') -Encoding UTF8 -Value '{"name":"AutoCode","version":"2.0.0","main":"main.js","saved_files":[]}'
+    Set-Content -LiteralPath (Join-Path $officialAutoCode 'main.js') -Encoding UTF8 -Value 'const version = 2;'
+    Set-Content -LiteralPath (Join-Path $officialAutoCode 'settings.json') -Encoding UTF8 -Value '[{"name":"username"}]'
+    Set-Content -LiteralPath (Join-Path $installedAutoCode 'manifest.json') -Encoding UTF8 -Value '{"name":"AutoCode","version":"1.0.0","main":"main.js","saved_files":[]}'
+    Set-Content -LiteralPath (Join-Path $installedAutoCode 'main.js') -Encoding UTF8 -Value 'const version = 1;'
+    Set-Content -LiteralPath (Join-Path $installedAutoCode 'settings.json') -Encoding UTF8 -Value '[{"name":"username","default":"fixture-user"}]'
 
     & $updater `
         -OfficialSourceRoot $officialRoot `
+        -PolicyPath (Join-Path $PSScriptRoot 'packages.json') `
         -BetterGIRoot $installRoot `
         -BackupRoot $backupRoot `
         -TransactionId 'fixture' `
@@ -55,6 +65,15 @@ try {
     if (Test-Path -LiteralPath (Join-Path $installedPackage 'stale.js')) {
         throw 'Undeclared stale content survived the replacement.'
     }
+    $autoCodeSettingsPath = Join-Path $installedAutoCode 'settings.json'
+    $autoCodeSettingsRaw = Get-Content -LiteralPath $autoCodeSettingsPath -Raw
+    if (-not $autoCodeSettingsRaw.TrimStart().StartsWith('[')) {
+        throw 'Official-package settings must remain a JSON array after default migration.'
+    }
+    $autoCodeSettings = $autoCodeSettingsRaw | ConvertFrom-Json
+    if (@($autoCodeSettings | Where-Object { $_.name -eq 'username' })[0].default -ne 'fixture-user') {
+        throw 'The declared official-package setting default was not preserved.'
+    }
 
     $backupPackage = Join-Path $backupRoot 'fixture\packages\Alpha'
     if ((Get-Content -LiteralPath (Join-Path $backupPackage 'main.js') -Raw) -notmatch 'version = 1') {
@@ -68,6 +87,13 @@ try {
     New-Item -ItemType Directory -Path $legacyFullyAuto -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $legacyFullyAuto 'config') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $legacyFullyAuto 'config\uidSettings.json') -Encoding UTF8 -Value '{"uid":"fixture"}'
+    $legacyArtifacts = Join-Path $installRoot 'User\JsScript\AAA-Artifacts-Bulk-Supply'
+    New-Item -ItemType Directory -Path $legacyArtifacts -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $legacyArtifacts 'settings.json') -Encoding UTF8 -Value @'
+[
+  { "name": "accountName", "default": "fixture-account" }
+]
+'@
 
     & $updater `
         -OfficialSourceRoot $officialRoot `
@@ -88,6 +114,11 @@ try {
     $hcyManifest = Get-Content -LiteralPath (Join-Path $hcyFullyAuto 'manifest.json') -Raw | ConvertFrom-Json
     if (@($hcyManifest.saved_files) -notcontains 'config/uidSettings.json') {
         throw 'The generated HCY manifest does not retain its compatibility state contract.'
+    }
+    $hcyArtifactSettings = Get-Content -LiteralPath (Join-Path $installRoot 'User\JsScript\HCY-AAA-Artifacts-Bulk-Supply\settings.json') -Raw | ConvertFrom-Json
+    $accountName = @($hcyArtifactSettings | Where-Object { $_.name -eq 'accountName' })
+    if ($accountName.Count -ne 1 -or $accountName[0].default -ne 'fixture-account') {
+        throw 'The declared legacy setting default was not migrated into the HCY package.'
     }
     & $validator -BetterGIRoot $installRoot -ForkRoot $repoRoot | Out-Null
 

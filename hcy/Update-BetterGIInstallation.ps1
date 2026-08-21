@@ -5,6 +5,8 @@ param(
 
     [string]$ForkRoot,
 
+    [string]$PolicyPath,
+
     [Parameter(Mandatory)]
     [string]$BetterGIRoot,
 
@@ -19,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 function Copy-DirectoryContents {
     param(
@@ -103,6 +106,50 @@ function Copy-PreservedFiles {
     }
 }
 
+function Copy-SettingDefaults {
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourcePackage,
+
+        [Parameter(Mandatory)]
+        [string]$StagedPackage,
+
+        [string[]]$SettingNames
+    )
+
+    if (@($SettingNames).Count -eq 0) {
+        return
+    }
+
+    $sourcePath = Join-Path $SourcePackage 'settings.json'
+    $stagedPath = Join-Path $StagedPackage 'settings.json'
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        throw "Settings-default migration source not found: $sourcePath"
+    }
+    if (-not (Test-Path -LiteralPath $stagedPath -PathType Leaf)) {
+        throw "Settings-default migration target not found: $stagedPath"
+    }
+
+    $sourceSettings = @(Get-Content -LiteralPath $sourcePath -Raw | ConvertFrom-Json)
+    $stagedSettings = @(Get-Content -LiteralPath $stagedPath -Raw | ConvertFrom-Json)
+    foreach ($settingName in $SettingNames) {
+        $sourceMatches = @($sourceSettings | Where-Object { $_.name -eq $settingName })
+        $stagedMatches = @($stagedSettings | Where-Object { $_.name -eq $settingName })
+        if ($sourceMatches.Count -ne 1 -or $stagedMatches.Count -ne 1) {
+            throw "Expected one '$settingName' setting in both $sourcePath and $stagedPath."
+        }
+        if ($stagedMatches[0].PSObject.Properties.Name -contains 'default') {
+            $stagedMatches[0].default = $sourceMatches[0].default
+        }
+        else {
+            $stagedMatches[0] | Add-Member -NotePropertyName default -NotePropertyValue $sourceMatches[0].default
+        }
+    }
+
+    $json = ConvertTo-Json -InputObject $stagedSettings -Depth 100
+    [System.IO.File]::WriteAllText($stagedPath, $json + [Environment]::NewLine, $utf8NoBom)
+}
+
 $officialRootPath = [System.IO.Path]::GetFullPath($OfficialSourceRoot)
 $betterGIRootPath = [System.IO.Path]::GetFullPath($BetterGIRoot)
 $installRoot = [System.IO.Path]::GetFullPath((Join-Path $betterGIRootPath 'User\JsScript'))
@@ -124,6 +171,26 @@ if ($officialPackages.Count -eq 0) {
     throw "No official script packages found under: $officialRootPath"
 }
 
+$policyDocument = $null
+$policyFilePath = $null
+if (-not [string]::IsNullOrWhiteSpace($PolicyPath)) {
+    $policyFilePath = [System.IO.Path]::GetFullPath($PolicyPath)
+}
+elseif (-not [string]::IsNullOrWhiteSpace($ForkRoot)) {
+    $policyFilePath = Join-Path ([System.IO.Path]::GetFullPath($ForkRoot)) 'hcy\packages.json'
+}
+if ($null -ne $policyFilePath) {
+    if (-not (Test-Path -LiteralPath $policyFilePath -PathType Leaf)) {
+        throw "HCY installation policy not found: $policyFilePath"
+    }
+    $policyDocument = Get-Content -LiteralPath $policyFilePath -Raw | ConvertFrom-Json
+}
+
+$officialSettingDefaults = @{}
+foreach ($entry in @($policyDocument.preserveOfficialSettingDefaults)) {
+    $officialSettingDefaults[[string]$entry.folder] = @($entry.settings)
+}
+
 $operations = @($officialPackages | ForEach-Object {
     $package = $_
     $installedPackage = Join-Path $installRoot $package.Name
@@ -140,6 +207,13 @@ $operations = @($officialPackages | ForEach-Object {
         existed = Test-Path -LiteralPath $installedPackage -PathType Container
         savedFiles = @(Get-SavedFilePatterns -ManifestPaths @($sourceManifest, $installedManifest))
         preserveSources = @($installedPackage)
+        preserveSettingDefaults = if ($officialSettingDefaults.ContainsKey($package.Name)) {
+            @($officialSettingDefaults[$package.Name])
+        }
+        else {
+            @()
+        }
+        settingsSource = $installedPackage
     }
 })
 
@@ -154,7 +228,12 @@ if (-not [string]::IsNullOrWhiteSpace($ForkRoot)) {
         throw "HCY package publisher not found: $hcyPublisherPath"
     }
 
-    $hcyManifest = Get-Content -LiteralPath $hcyManifestPath -Raw | ConvertFrom-Json
+    $hcyManifest = if ($policyFilePath -eq $hcyManifestPath -and $null -ne $policyDocument) {
+        $policyDocument
+    }
+    else {
+        Get-Content -LiteralPath $hcyManifestPath -Raw | ConvertFrom-Json
+    }
 }
 
 if (-not $Apply) {
@@ -173,6 +252,13 @@ if (-not $Apply) {
                 existed = Test-Path -LiteralPath $targetPath -PathType Container
                 savedFiles = @($mapping.preserveFiles)
                 preserveSources = @(Join-Path $installRoot $mapping.preserveFromFolder)
+                preserveSettingDefaults = @($mapping.preserveSettingDefaults)
+                settingsSource = if (Test-Path -LiteralPath $targetPath -PathType Container) {
+                    $targetPath
+                }
+                else {
+                    Join-Path $installRoot $mapping.preserveFromFolder
+                }
             }
         }
     }
@@ -220,6 +306,13 @@ if ($null -ne $hcyManifest) {
             existed = Test-Path -LiteralPath $installedPackage -PathType Container
             savedFiles = @($savedFiles)
             preserveSources = @($installedPackage, $legacyPackage | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+            preserveSettingDefaults = @($mapping.preserveSettingDefaults)
+            settingsSource = if (Test-Path -LiteralPath $installedPackage -PathType Container) {
+                $installedPackage
+            }
+            else {
+                $legacyPackage
+            }
         }
     }
 }
@@ -231,6 +324,12 @@ foreach ($operation in $operations) {
         if (Test-Path -LiteralPath $preserveSource -PathType Container) {
             Copy-PreservedFiles -InstalledPackage $preserveSource -StagedPackage $stagedPackage -Patterns $operation.savedFiles
         }
+    }
+    if (@($operation.preserveSettingDefaults).Count -gt 0) {
+        Copy-SettingDefaults `
+            -SourcePackage $operation.settingsSource `
+            -StagedPackage $stagedPackage `
+            -SettingNames $operation.preserveSettingDefaults
     }
 }
 
