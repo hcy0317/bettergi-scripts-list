@@ -112,7 +112,7 @@ export async function executeCommissionTracking(stepRegistry) {
 
         if (commissions.length === 0) {
             log.info("UID {uid} 已完成委托数量: {count}，剩余可执行的委托为空", uid, completedCount);
-            return false;
+            return allCommissions.length > 0 && completedCount === allCommissions.length;
         }
 
         for (const comm of commissions) {
@@ -166,10 +166,10 @@ export async function executeCommissionTracking(stepRegistry) {
         }
 
         log.info("委托追踪全部执行完成，共执行 {count}/{total} 个委托", successCount, commissions.length);
-        return successCount > 0;
+        return completedCount + successCount === allCommissions.length;
     } catch (error) {
         if (isCancellationError(error)) { throw error; }
         log.error("执行委托追踪时出错: {error}", error.message);
-        return false;
+        throw error;
     }
 }

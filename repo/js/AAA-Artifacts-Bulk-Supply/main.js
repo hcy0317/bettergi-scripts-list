@@ -1053,7 +1053,11 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 state.cancel = true;
             }
             success = false;
-            break;
+            if (state.cancel) {
+                return;
+            }
+            log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
+            continue;
         }
         if (pathRes !== undefined && typeof pathRes.success === 'boolean') {
             // 新版本BGI：直接使用返回值判定路线是否成功
@@ -1261,18 +1265,15 @@ async function runPath(fullPath, targetItemPath = null) {
 
     /* ---------- 主任务 ---------- */
     const pathingTask = (async () => {
-        log.info(`开始执行路线: ${fullPath}`);
-        await fakeLog(fullPath, false, true, 0);
-        let runRes;
         try {
-            runRes = await pathingScript.runFile(fullPath);
-        } catch (error) {
-            log.error(`执行路线 ${fullPath} 时发生错误：${error.message}`);
-            runRes = undefined;
+            log.info(`开始执行路线: ${fullPath}`);
+            await fakeLog(fullPath, false, true, 0);
+            const runResult = await pathingScript.runFile(fullPath);
+            await fakeLog(fullPath, false, false, 0);
+            return runResult;
+        } finally {
+            state.running = false;
         }
-        await fakeLog(fullPath, false, false, 0);
-        state.running = false;
-        return runRes;
     })();
 
     /* ---------- 伴随任务 ---------- */
@@ -1301,9 +1302,11 @@ async function runPath(fullPath, targetItemPath = null) {
     })();
 
     /* ---------- 并发等待 ---------- */
-    const results = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
-    // 返回地图追踪执行结果（旧版本BGI无返回值时返回 undefined）
-    return results[0].status === "fulfilled" ? results[0].value : undefined;
+    const [pathingResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+    if (pathingResult.status === "rejected") {
+        throw pathingResult.reason;
+    }
+    return pathingResult.value;
 }
 
 //加载拾取物图片

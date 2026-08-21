@@ -1,6 +1,28 @@
 const COMPLETED_TASKS_FILE = "./completed_tasks.json";
 let skipCheckStamina = 1;//为0时跳过检查体力
 let messageBuffer = '';
+const taskFailures = [];
+
+function errorToText(error) {
+    if (error && error.message) return error.message;
+    return String(error);
+}
+
+function recordTaskFailure(taskName, error) {
+    const message = `${taskName}: ${errorToText(error)}`;
+    taskFailures.push(message);
+    log.error(message);
+}
+
+function recordTaskIncomplete(taskName, reason) {
+    log.warn(`${taskName}: ${errorToText(reason)}`);
+}
+
+function throwIfTaskFailures() {
+    if (taskFailures.length > 0) {
+        throw new Error(`角色养成一条龙存在未完成任务：${taskFailures.join('；')}`);
+    }
+}
 // 累积消息函数
 function addNotification(message) {
     messageBuffer += message + '\n';
@@ -1043,6 +1065,12 @@ async function getWeaponMaterialCount(materialName) {
     }
 }
 
+function canAttemptMaterialDomain(originalResin) {
+    if (originalResin >= 20) return true;
+    log.info(`原粹树脂不足20，仍尝试自动秘境以使用浓缩树脂；若浓缩树脂也不足，自动秘境会返回失败`);
+    return true;
+}
+
 //去刷天赋书
 async function getTalentBook(materialName,bookRequireCounts) {
 while(1){
@@ -1051,7 +1079,7 @@ let afterStamina = 0;
 let res = 9999999;
 if(skipCheckStamina)afterStamina = await queryStaminaValue();
 if(afterStamina< 20) skipCheckStamina = 0;
-    if ( afterStamina >= 20 ){       
+    if (canAttemptMaterialDomain(afterStamina)){
              try {
              log.info(`体力充足，开始检测物品数量`);
              let bookCounts = await getMaterialCount(materialName);
@@ -1085,7 +1113,10 @@ if(afterStamina< 20) skipCheckStamina = 0;
              await addCompletedTask("talent", materialName, bookRequireCounts);
              addNotification(`${materialName}天赋书数量已经满足要求！！！`);
              } 
-             else addNotification(`${materialName}天赋书大约还差${res.toFixed(2)}本紫色品质没有刷取`);
+             else {
+              addNotification(`${materialName}天赋书大约还差${res.toFixed(2)}本紫色品质没有刷取`);
+              recordTaskIncomplete(`${materialName}天赋书`, `体力不足或未完成，仍缺${res.toFixed(2)}本紫色品质`);
+             }
              return;
          }
 }
@@ -1099,7 +1130,7 @@ let afterStamina = 0;
 let res = 99999999;
 if(skipCheckStamina)afterStamina = await queryStaminaValue();
 if(afterStamina< 20) skipCheckStamina = 0;
-    if ( afterStamina >= 20 ){       
+    if (canAttemptMaterialDomain(afterStamina)){
              try {
              log.info(`体力充足，开始检测物品数量`);
              let weaponCounts = await getWeaponMaterialCount(materialName);
@@ -1133,7 +1164,10 @@ if(afterStamina< 20) skipCheckStamina = 0;
              await addCompletedTask("wepon", materialName, weaponRequireCounts);
              addNotification(`武器材料${materialName}数量已经满足要求！！！`);
              } 
-             else addNotification(`武器材料${materialName}大约还差${res.toFixed(2)}个紫色品质没有刷取`);
+             else {
+              addNotification(`武器材料${materialName}大约还差${res.toFixed(2)}个紫色品质没有刷取`);
+              recordTaskIncomplete(`武器材料${materialName}`, `体力不足或未完成，仍缺${res.toFixed(2)}个紫色品质`);
+             }
              return;
          }
 }
@@ -1212,7 +1246,10 @@ if(afterStamina< 20) skipCheckStamina = 0;
              log.info(`体力值为${afterStamina},可能无法刷取首领材料${bossName}`);
              const bossCounts = await getBossMaterialCount(bossName);
              let res = bossRequireCounts-bossCounts;
-             if(res>0) addNotification(`${bossName}还差${res}个材料没有刷取`);
+             if(res>0) {
+                      addNotification(`${bossName}还差${res}个材料没有刷取`);
+                      recordTaskIncomplete(`${bossName}首领材料`, `体力不足或未完成，仍缺${res}个材料`);
+             }
              else {
                      addNotification(`${bossName}材料数量已经满足要求！！！`);
                      await addCompletedTask("boss", bossName, bossRequireCounts);
@@ -1274,7 +1311,10 @@ else await getTalentBook(talentBookName,bookRequireCounts);
 // 刷取完成后标记为完成
 //await addCompletedTask("talent", talentBookName, bookRequireCounts);
 }
-catch (error) {  notification.send(`天赋书${talentBookName}刷取失败，错误信息: ${error}`);}
+catch (error) {
+  notification.send(`天赋书${talentBookName}刷取失败，错误信息: ${error}`);
+  recordTaskFailure(`天赋书${talentBookName}`, error);
+}
 }
 else log.info(`没有选择刷取天赋书${i+1}，跳过执行`);
 }
@@ -1290,7 +1330,10 @@ const isCompleted = await isTaskCompleted("wepon", weaponName, weaponRequireCoun
 if (isCompleted){addNotification(`武器材料${weaponName} 已刷取至目标数量，跳过执行`);} 
 else await getWeaponMaterial(weaponName,weaponRequireCounts);
 }
-catch (error) {  notification.send(`武器材料${weaponName}刷取失败，错误信息: ${error}`);}
+catch (error) {
+  notification.send(`武器材料${weaponName}刷取失败，错误信息: ${error}`);
+  recordTaskFailure(`武器材料${weaponName}`, error);
+}
 }
 else log.info(`没有选择刷取武器材料${i+1}，跳过执行`);
 }
@@ -1304,12 +1347,16 @@ const isCompleted = await isTaskCompleted("boss", bossName, bossRequireCounts);
 if (isCompleted){addNotification(`首领材料${bossName} 已刷取至目标数量，跳过执行`);} 
 else await getBossMaterial(bossName,bossRequireCounts);
 }
-catch (error) {  notification.send(`首领材料${bossName}刷取失败，错误信息: ${error}`);}
+catch (error) {
+  notification.send(`首领材料${bossName}刷取失败，错误信息: ${error}`);
+  recordTaskFailure(`首领材料${bossName}`, error);
+}
 }
 else log.info(`没有选择挑战首领${i+1}，跳过执行`);
 }
 
 sendBufferedNotifications();//发送累积的完成信息
+throwIfTaskFailures();
 
 })();
 
