@@ -11,6 +11,7 @@ const mappings = JSON.parse(
 
 assert.equal(mappings.schemaVersion, 1);
 assert.equal(mappings.packages.length, 4);
+assert.equal(mappings.preserveOfficialSettingDefaults.length, 8);
 
 const targetFolders = new Set();
 for (const entry of mappings.packages) {
@@ -18,6 +19,7 @@ for (const entry of mappings.packages) {
     assert.notEqual(entry.sourceFolder, entry.targetFolder);
     assert.equal(typeof entry.preserveFromFolder, "string");
     assert(Array.isArray(entry.preserveFiles));
+    assert(Array.isArray(entry.preserveSettingDefaults));
     assert(!targetFolders.has(entry.targetFolder), `duplicate target: ${entry.targetFolder}`);
     targetFolders.add(entry.targetFolder);
 

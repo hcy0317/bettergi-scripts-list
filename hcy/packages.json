@@ -1,5 +1,15 @@
 {
   "schemaVersion": 1,
+  "preserveOfficialSettingDefaults": [
+    { "folder": "AutoCode", "settings": ["username"] },
+    { "folder": "AutoMonday", "settings": ["username"] },
+    { "folder": "CD-Aware-AutoGather", "settings": ["manualSetAccountName"] },
+    { "folder": "DailyHarvestStats", "settings": ["profile_id"] },
+    { "folder": "AccountSwitchStateMachine", "settings": ["targetUid"] },
+    { "folder": "JoinFriendsWorld", "settings": ["uid"] },
+    { "folder": "SwitchAccountMultipleMode", "settings": ["uid"] },
+    { "folder": "AutoEnter", "settings": ["enteringUID"] }
+  ],
   "packages": [
     {
       "sourceFolder": "AutoCommissionNova",
@@ -9,6 +19,7 @@
         "Data/user-config.json",
         "Data/account-state.json"
       ],
+      "preserveSettingDefaults": [],
       "revision": 1,
       "requiredMarkers": [
         {
@@ -35,6 +46,7 @@
         "config/path-json-by-uid.json",
         "config/uidSettings.json"
       ],
+      "preserveSettingDefaults": [],
       "revision": 1,
       "requiredMarkers": [
         {
@@ -54,6 +66,7 @@
       "preserveFiles": [
         "completed_tasks.json"
       ],
+      "preserveSettingDefaults": [],
       "revision": 1,
       "requiredMarkers": [
         {
@@ -67,6 +80,9 @@
       "targetFolder": "HCY-AAA-Artifacts-Bulk-Supply",
       "preserveFromFolder": "AAA-Artifacts-Bulk-Supply",
       "preserveFiles": [],
+      "preserveSettingDefaults": [
+        "accountName"
+      ],
       "revision": 1,
       "requiredMarkers": [
         {
