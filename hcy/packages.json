@@ -4,6 +4,11 @@
     {
       "sourceFolder": "AutoCommissionNova",
       "targetFolder": "HCY-AutoCommission",
+      "preserveFromFolder": "AutoCommission",
+      "preserveFiles": [
+        "Data/user-config.json",
+        "Data/account-state.json"
+      ],
       "revision": 1,
       "requiredMarkers": [
         {
@@ -13,12 +18,23 @@
         {
           "file": "src/core/commission-executor.js",
           "text": "completedCount + successCount === allCommissions.length"
+        },
+        {
+          "file": "src/utils/account-utils.js",
+          "text": "migrateLegacyUnifiedConfig(uid)"
         }
       ]
     },
     {
       "sourceFolder": "FullyAutoAndSemiAutoTools",
       "targetFolder": "HCY-FullyAutoAndSemiAutoTools",
+      "preserveFromFolder": "FullyAutoAndSemiAutoTools",
+      "preserveFiles": [
+        "config/record.json",
+        "config/PathRecord.json",
+        "config/path-json-by-uid.json",
+        "config/uidSettings.json"
+      ],
       "revision": 1,
       "requiredMarkers": [
         {
@@ -34,6 +50,10 @@
     {
       "sourceFolder": "角色养成一条龙",
       "targetFolder": "HCY-角色养成一条龙",
+      "preserveFromFolder": "角色养成一条龙",
+      "preserveFiles": [
+        "completed_tasks.json"
+      ],
       "revision": 1,
       "requiredMarkers": [
         {
@@ -45,6 +65,8 @@
     {
       "sourceFolder": "AAA-Artifacts-Bulk-Supply",
       "targetFolder": "HCY-AAA-Artifacts-Bulk-Supply",
+      "preserveFromFolder": "AAA-Artifacts-Bulk-Supply",
+      "preserveFiles": [],
       "revision": 1,
       "requiredMarkers": [
         {

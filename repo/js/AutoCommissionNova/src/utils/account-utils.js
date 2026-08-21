@@ -1,5 +1,6 @@
 import { THRESHOLDS } from "../config/index.js";
 import { listAccountUids, loadUserConfig } from "../loaders/user-config.js";
+import { migrateLegacyUnifiedConfig } from "../migrations/legacy-unified-config-migration.js";
 import { calculateSimilarity } from "../recognition/text-similarity.js";
 
 let cachedCurrentUid = "";
@@ -112,6 +113,7 @@ export async function initializeCurrentAccount(options = {}) {
         if (options.required !== false) throw new Error("无法确认当前 UID，请检查游戏主界面的 UID 显示或先在配置页新增该 UID");
         return "";
     }
+    migrateLegacyUnifiedConfig(uid);
     loadUserConfig(uid, { create: true });
     return uid;
 }

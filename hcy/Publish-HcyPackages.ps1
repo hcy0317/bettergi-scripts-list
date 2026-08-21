@@ -30,6 +30,11 @@ foreach ($entry in $mapping.packages) {
     $manifest.name = "HCY $($manifest.name)"
     $manifest.version = "$($manifest.version)-hcy.$($entry.revision)"
     $manifest.description = "HCY 兼容维护版。上游包：$($entry.sourceFolder)。$($manifest.description)"
+    $savedFiles = @(
+        @($manifest.saved_files)
+        @($entry.preserveFiles)
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique
+    $manifest.saved_files = @($savedFiles)
     $manifestJson = $manifest | ConvertTo-Json -Depth 100
     [System.IO.File]::WriteAllText(
         $manifestPath,
