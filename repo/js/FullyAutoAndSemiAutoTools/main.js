@@ -1,5 +1,6 @@
 import {toMainUi} from "./utils/tool";
 import {filterUsablePathNodes, selectUidValue, upsertUidValue} from "./utils/startup";
+import {getEffectiveSelectedOptions} from "./utils/route-selection";
 
 let manifest_json = "manifest.json";
 let manifest = undefined
@@ -789,7 +790,11 @@ async function initRun(config_run) {
         if (!multiJson || !multiJson.options || multiJson.options.length === 0) continue;
 
         const labelParentName = getBracketContent(multiJson.label); // [xxx]
-        const selectedOptions = multiJson.options;
+        const selectedOptions = getEffectiveSelectedOptions(settingsName, multiJson.options, multiCheckboxMap);
+        if (selectedOptions.length === 0) {
+            log.debug("[PATH] 跳过已由更深层选择覆盖的父级选项: {0}", settingsName);
+            continue;
+        }
 
         // 2. 从 PATH_JSON_LIST 中筛选命中的路径。旧缓存可能残留空目录节点或
         // 已被上游删除的路线文件；在交给宿主执行前验证，避免成片 ReadText/JSON 错误。
@@ -915,7 +920,7 @@ async function initRun(config_run) {
             const nextMap = bodyList.length <= 0 ? new Map() : await cronUtil.getNextCronTimestampAll(bodyList, cd.http_api) ?? new Map();
             await debugKey(``, JSON.stringify({nextMap: [...nextMap]}), true)
             //还在cd中的path
-            const in_cd_paths = cdFilterMatchedPaths.filter(async item => {
+            const in_cd_paths = cdFilterMatchedPaths.filter(item => {
                 const timeConfig = timeConfigs.find(cfg =>
                     item.fullPathNames.includes(cfg.name)
                 );
@@ -935,7 +940,7 @@ async function initRun(config_run) {
                         // return (next && now >= next);
                         // const key = generatedKey(item);
                         const cron_ok = nextMap.get(item.path)
-                        return !(cron_ok?.ok); // 不应该在CD中时返回true
+                        return cron_ok === false; // 服务返回 true 表示区间内已到期，不应继续算作 CD 中
                     }
                     default:
                         return false;
@@ -1929,7 +1934,7 @@ async function runPath(path, root_name = "", parent_name = "", current_name = ""
     const hoeGroundKey = `${parent_name}->${current_name}`;
     const hoeGroundRootKey = `${root_name}->${parent_name}->${current_name}`;
     if (team.HoeGroundMap.has(hoeGroundRootKey) || team.HoeGroundMap.has(hoeGroundKey)) {
-        const hoeGroundName = team.HoeGroundMap.get(hoeGroundKey) || team.HoeGroundMap.get(hoeGroundKey);
+        const hoeGroundName = team.HoeGroundMap.get(hoeGroundRootKey) || team.HoeGroundMap.get(hoeGroundKey);
         await switchTeamByName(hoeGroundName);
     } else {
         const entry = [...SevenElement.SevenElementsMap.entries()].find(([key, val]) => {

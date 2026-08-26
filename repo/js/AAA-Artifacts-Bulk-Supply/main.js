@@ -857,6 +857,14 @@ function setActivatePickUp(value) {
     }
 }
 
+async function runOptionalPaths(folderFilePath, PartyName, doStop, furinaRequirement = "") {
+    if (!file.IsFolder(folderFilePath)) {
+        log.warn(`可选路线目录不存在，跳过：${folderFilePath}`);
+        return;
+    }
+    await runPaths(folderFilePath, PartyName, doStop, furinaRequirement);
+}
+
 //运行普通路线
 async function runNormalPath(doStop) {
     if (settings.fastMode) { return; }
@@ -868,7 +876,7 @@ async function runNormalPath(doStop) {
     const normalExecutePath = normalPath + "/执行";
     if (combatPartyName) {
         log.info("填写了清怪队伍，执行清怪路线");
-        await runPaths(normalCombatPath, combatPartyName, doStop, "black");
+        await runOptionalPaths(normalCombatPath, combatPartyName, doStop, "black");
     }
     setActivatePickUp(true);
     await runPaths(normalExecutePath, artifactPartyName, doStop, "white");
@@ -934,8 +942,8 @@ async function runActivatePath() {
 
         if (combatPartyName) {
             log.info("填写了清怪队伍，执行清怪路线");
-            await runPaths(extraCombatPath, combatPartyName, false, "black");
-            await runPaths(endingCombatPath, combatPartyName, false, "black");
+            await runOptionalPaths(extraCombatPath, combatPartyName, false, "black");
+            await runOptionalPaths(endingCombatPath, combatPartyName, false, "black");
         }
     }
 }
@@ -1048,13 +1056,20 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
         } catch (error) {
             skiprecord = true;
             log.error(`执行路径文件时发生错误：${error.message}`);
-            if (error.message === "A task was canceled.") {
+            if (pathingScript.isCancellationRequested) {
                 log.warn("任务取消");
                 state.cancel = true;
+                throw error;
             }
             success = false;
             if (state.cancel) {
                 return;
+            }
+            try {
+                await genshin.returnMainUi();
+                await sleep(500);
+            } catch (recoveryError) {
+                log.warn(`路线失败后返回主界面失败，继续下一条路线：${recoveryError.message}`);
             }
             log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
             continue;

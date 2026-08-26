@@ -285,7 +285,7 @@ class Domain extends Base {
         // 创建秘境参数对象，初始化值为0
         let domainParam = new AutoDomainParam();
         //关闭榨干原粹树脂
-        domainParam.specifyResinUse = true
+        domainParam.SpecifyResinUse = true
         //定死做预留冗余 先不实现 不能指定次数 只能指定启用
         let physical_domain = autoDomain?.physical
         //     || [
@@ -299,18 +299,28 @@ class Domain extends Base {
             const names = config.user.physical.names;
             physical_domain = []
             names.forEach((name, index) => {
-                physical_domain.push({order: index, name: name, open: index === 0})
+                physical_domain.push({order: index, name: name, open: index === 0, count: index === 0 ? 1 : 0})
             })
         }
 
         physical_domain.sort((a, b) => a.order - b.order)
         // 不包含原粹树脂的和
+        const normalizeResinUseCount = item => {
+            if (!item?.open) return 0
+            const count = Number.parseInt(String(item?.count ?? 1), 10)
+            return Number.isFinite(count) && count > 0 ? count : 0
+        }
         const noOriginalSum = physical_domain.filter(item => item?.name.trim() !== config.user.physical.names[0])
-            .filter(item => item?.open).length;//求和
+            .reduce((sum, item) => sum + normalizeResinUseCount(item), 0);//求和
         // 只包含原粹树脂的和
         const originalSum = physical_domain.filter(item => item?.name?.trim() === config.user.physical.names[0])
-            .filter(item => item?.open).length;
+            .reduce((sum, item) => sum + normalizeResinUseCount(item), 0);
         const resinPriorityList = physical_domain.filter(item => item?.open).map(item => item?.name?.trim())
+        const resinUseCounts = new Map(physical_domain.map(item => [item?.name?.trim(), normalizeResinUseCount(item)]))
+        domainParam.OriginalResinUseCount = resinUseCounts.get("原粹树脂") ?? 0
+        domainParam.CondensedResinUseCount = resinUseCounts.get("浓缩树脂") ?? 0
+        domainParam.TransientResinUseCount = resinUseCounts.get("须臾树脂") ?? 0
+        domainParam.FragileResinUseCount = resinUseCounts.get("脆弱树脂") ?? 0
         //  /** 树脂使用优先级列表 */
         //   resinPriorityList: string[];
         //   /** 使用原粹树脂次数 */
@@ -328,7 +338,20 @@ class Domain extends Base {
         config.user.physical.current = currentPhysical.originalResinCount;
 
         const physical = config.user.physical
-        if (domainParam.specifyResinUse && physical.current < physical.min && noOriginalSum <= 0 && originalSum > 0) {
+        const resinAvailableCounts = new Map([
+            ["原粹树脂", Number(currentPhysical.originalResinCount) >= physical.min ? 1 : 0],
+            ["浓缩树脂", Number(currentPhysical.condensedResinCount) || 0],
+            ["须臾树脂", Number(currentPhysical.transientResinCount) || 0],
+            ["脆弱树脂", Number(currentPhysical.fragileResinCount) || 0],
+        ])
+        const hasUsableSelectedResin = physical_domain.some(item =>
+            normalizeResinUseCount(item) > 0
+            && (resinAvailableCounts.get(item?.name?.trim()) ?? 0) > 0)
+        if (domainParam.SpecifyResinUse && !hasUsableSelectedResin) {
+            Log.warn(`已启用的树脂均不足，本轮不进入秘境`)
+            return {}
+        }
+        if (domainParam.SpecifyResinUse && physical.current < physical.min && noOriginalSum <= 0 && originalSum > 0) {
             throwError(`体力不足，当前体力${physical.current}，最低体力${physical.min}，请手动补充体力后重试`)
         }
 
@@ -365,7 +388,7 @@ class Domain extends Base {
             // 复活重试
             for (let i = 0; i < config.run.retry_count; i++) {
                 try {
-                    await dispatcher.RunAutoDomainTask(domainParam);
+                    return await dispatcher.RunAutoDomainTask(domainParam);
                     // 其他场景不重试
                     break;
                 } catch (e) {
@@ -881,23 +904,8 @@ class Boss extends Base {
     }) {
         Log.info(`{0}==>{1}`, "开始执行Boss任务", autoBoss.bossName)
         Log.debug(`Object:{0}`,JSON.stringify(autoBoss))
-        //先去安全点回血
-        await genshin.tpToStatueOfTheSeven();
-        const currentPhysical = await Physical.countAllResin()
-        config.user.physical.currentJson = currentPhysical;
-        config.user.physical.current = currentPhysical.originalResinCount;
-
-        const originalResin = config.user.physical.currentJson.originalResinCount;
-        if (
-            (originalResin < (config.user.physical.min * 2))
-            ||
-            (autoBoss.useFragileResin && (currentPhysical.fragileResinCount || 0) < 1)
-            ||
-            (autoBoss.useTransientResin && (currentPhysical.transientResinCount || 0) < 1)
-        ) {
-            Log.warn(`{0}`, "Boss挑战树脂不足")
-            return
-        }
+        // AutoBossTask 自己会在每轮开始前检查原粹树脂、处理补充树脂并回到主界面。
+        // 此处不再重复传送神像和扫描地图，避免同一行动连续开两次地图并引入额外等待。
         // let autoBoss = {
         //     /** 需要讨伐的 Boss 名称。*/
         //     bossName: "",
