@@ -14,6 +14,7 @@ import {
 } from './utils/load_check_run'
 import {Record} from "./utils/tool";
 import {checkHolyRelicsKey} from "./utils/HolyRelics";
+import {runPlanDrivenCultivation, runCultivationInventoryReconcile} from './utils/cultivation_plan';
 
 /**
  * 初始化函数
@@ -140,6 +141,14 @@ async function run(list = []) {
 async function main() {
     // 初始化配置
     await init();
+    if (settings.cultivation_plan_mode) {
+        await runPlanDrivenCultivation(config);
+        return;
+    }
+    if (settings.cultivation_inventory_reconcile_mode) {
+        await runCultivationInventoryReconcile(config);
+        return;
+    }
     // 获取配置
     let runConfig = config.run.config;
     //"队伍名称|秘境名称/刷取物品名称|刷几轮|限时/周日|周几执行(0-6)不填默认执行|执行顺序,..."
@@ -148,12 +157,7 @@ async function main() {
     await run(list)
 }
 
-(async function () {
-    // await test()
-    // await test1()
-    // await test2()
-    await main()
-})()
+await main();
 
 async function test() {
     await init();

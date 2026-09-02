@@ -61,6 +61,70 @@ for (const entry of mappings.packages) {
     }
 }
 
+const fullyAutoManifest = JSON.parse(
+    fs.readFileSync(
+        path.join(repoRoot, "repo", "js", "FullyAutoAndSemiAutoTools", "manifest.json"),
+        "utf8",
+    ),
+);
+assert(
+    fullyAutoManifest.saved_files.includes("pathing/"),
+    "official FullyAutoAndSemiAutoTools must preserve its pathing junction",
+);
+const hcyFullyAutoMapping = mappings.packages.find(
+    (entry) => entry.sourceFolder === "FullyAutoAndSemiAutoTools",
+);
+assert(
+    hcyFullyAutoMapping?.preserveFiles.includes("pathing/"),
+    "HCY FullyAutoAndSemiAutoTools must preserve its pathing bridge",
+);
+
+const cultivationPlan = fs.readFileSync(
+    path.join(repoRoot, "repo", "js", "AutoPlan", "utils", "cultivation_plan.js"),
+    "utf8",
+);
+for (const marker of [
+    "await Physical.countAllResin()",
+    'action.actionType === "CRAFT_BATCH"',
+    "for (const craftAction of craftActions)",
+    "targets.materialNamesByGrid",
+    'async function countInventoryItems(names, gridScreenName, iconRecognitionMode = "GridIcon")',
+    'await countInventoryItems(retryNames, gridScreenName, "Item")',
+    'if (action.status === "PLAN_NEEDS_RECONCILE")',
+]) {
+    assert(
+        cultivationPlan.includes(marker),
+        `AutoPlan cultivation bridge is missing: ${marker}`,
+    );
+}
+assert.equal(
+    (cultivationPlan.match(/async function runInventoryReconcileOnce\(/g) ?? []).length,
+    1,
+    "AutoPlan cultivation bridge must keep one bounded inventory reconcile helper",
+);
+assert.doesNotMatch(
+    cultivationPlan,
+    /return true;\s*return /,
+    "AutoPlan cultivation bridge must not retain unreachable result branches",
+);
+
+const autoPlanMain = fs.readFileSync(
+    path.join(repoRoot, "repo", "js", "AutoPlan", "main.js"),
+    "utf8",
+);
+assert.match(
+    autoPlanMain,
+    /import \{runPlanDrivenCultivation, runCultivationInventoryReconcile\} from '\.\/utils\/cultivation_plan';/,
+    "AutoPlan main must import the plan-driven cultivation bridge",
+);
+assert.match(
+    autoPlanMain,
+    /await init\(\);[\s\S]*if \(settings\.cultivation_plan_mode\)[\s\S]*await runPlanDrivenCultivation\(config\);[\s\S]*if \(settings\.cultivation_inventory_reconcile_mode\)[\s\S]*await runCultivationInventoryReconcile\(config\);[\s\S]*let runConfig = config\.run\.config;/,
+    "AutoPlan main must dispatch cultivation modes before the legacy fixed-plan flow",
+);
+assert.match(autoPlanMain, /^await main\(\);?$/m, "AutoPlan main must await its lifecycle");
+assert.doesNotMatch(autoPlanMain, /\(async function \(\)/, "AutoPlan main must not detach its lifecycle");
+
 const emergencySupplyProcess = JSON.parse(
     fs.readFileSync(
         path.join(
