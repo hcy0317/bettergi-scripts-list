@@ -7,6 +7,8 @@ param(
 
     [string]$PolicyPath,
 
+    [string]$SubscriptionPath,
+
     [Parameter(Mandatory)]
     [string]$BetterGIRoot,
 
@@ -169,6 +171,42 @@ $officialPackages = @(Get-ChildItem -LiteralPath $officialRootPath -Directory | 
 } | Sort-Object Name)
 if ($officialPackages.Count -eq 0) {
     throw "No official script packages found under: $officialRootPath"
+}
+
+$subscriptionFilePath = if (-not [string]::IsNullOrWhiteSpace($SubscriptionPath)) {
+    [System.IO.Path]::GetFullPath($SubscriptionPath)
+}
+else {
+    Join-Path $betterGIRootPath 'User\Subscriptions\bettergi-scripts-list.json'
+}
+if (Test-Path -LiteralPath $subscriptionFilePath -PathType Leaf) {
+    $subscriptionEntries = @(Get-Content -LiteralPath $subscriptionFilePath -Raw | ConvertFrom-Json)
+    $subscribedPackageNames = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $subscriptionEntries) {
+        $normalized = ([string]$entry).Replace('\', '/').Trim('/')
+        if (-not $normalized.StartsWith('js/', [StringComparison]::OrdinalIgnoreCase)) {
+            continue
+        }
+        $packageName = $normalized.Substring(3).Split('/')[0]
+        if (-not [string]::IsNullOrWhiteSpace($packageName)) {
+            $null = $subscribedPackageNames.Add($packageName)
+        }
+    }
+
+    $availablePackageNames = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]@($officialPackages.Name),
+        [StringComparer]::OrdinalIgnoreCase)
+    $missingSubscriptions = @($subscribedPackageNames | Where-Object {
+        -not $availablePackageNames.Contains($_)
+    } | Sort-Object)
+    if ($missingSubscriptions.Count -gt 0) {
+        throw "Subscribed official packages are missing from the source: $($missingSubscriptions -join ', ')"
+    }
+
+    $officialPackages = @($officialPackages | Where-Object {
+        $subscribedPackageNames.Contains($_.Name)
+    })
 }
 
 $policyDocument = $null
@@ -338,6 +376,12 @@ $transaction = [ordered]@{
     transactionId = $TransactionId
     createdAtUtc = [DateTimeOffset]::UtcNow.ToString('O')
     officialSourceRoot = $officialRootPath
+    subscriptionPath = if (Test-Path -LiteralPath $subscriptionFilePath -PathType Leaf) {
+        $subscriptionFilePath
+    }
+    else {
+        $null
+    }
     betterGIRoot = $betterGIRootPath
     status = 'prepared'
     packages = @($operations)

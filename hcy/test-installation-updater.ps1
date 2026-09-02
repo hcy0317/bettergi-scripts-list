@@ -13,10 +13,12 @@ try {
     $installedPackage = Join-Path $installRoot 'User\JsScript\Alpha'
     $officialAutoCode = Join-Path $officialRoot 'AutoCode'
     $installedAutoCode = Join-Path $installRoot 'User\JsScript\AutoCode'
+    $officialUnsubscribed = Join-Path $officialRoot 'Unsubscribed'
+    $subscriptionRoot = Join-Path $installRoot 'User\Subscriptions'
 
     New-Item -ItemType Directory -Path (Join-Path $officialPackage 'state') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $installedPackage 'state') -Force | Out-Null
-    New-Item -ItemType Directory -Path $officialAutoCode,$installedAutoCode -Force | Out-Null
+    New-Item -ItemType Directory -Path $officialAutoCode,$installedAutoCode,$officialUnsubscribed,$subscriptionRoot -Force | Out-Null
 
     Set-Content -LiteralPath (Join-Path $officialPackage 'manifest.json') -Encoding UTF8 -Value @'
 {
@@ -46,6 +48,15 @@ try {
     Set-Content -LiteralPath (Join-Path $installedAutoCode 'manifest.json') -Encoding UTF8 -Value '{"name":"AutoCode","version":"1.0.0","main":"main.js","saved_files":[]}'
     Set-Content -LiteralPath (Join-Path $installedAutoCode 'main.js') -Encoding UTF8 -Value 'const version = 1;'
     Set-Content -LiteralPath (Join-Path $installedAutoCode 'settings.json') -Encoding UTF8 -Value '[{"name":"username","default":"fixture-user"}]'
+    Set-Content -LiteralPath (Join-Path $officialUnsubscribed 'manifest.json') -Encoding UTF8 -Value '{"name":"Unsubscribed","version":"1.0.0","main":"main.js","saved_files":[]}'
+    Set-Content -LiteralPath (Join-Path $officialUnsubscribed 'main.js') -Encoding UTF8 -Value 'throw new Error("must not install");'
+    Set-Content -LiteralPath (Join-Path $subscriptionRoot 'bettergi-scripts-list.json') -Encoding UTF8 -Value @'
+[
+  "js/Alpha",
+  "js/AutoCode",
+  "pathing/敌人与魔物"
+]
+'@
 
     & $updater `
         -OfficialSourceRoot $officialRoot `
@@ -73,6 +84,9 @@ try {
     $autoCodeSettings = $autoCodeSettingsRaw | ConvertFrom-Json
     if (@($autoCodeSettings | Where-Object { $_.name -eq 'username' })[0].default -ne 'fixture-user') {
         throw 'The declared official-package setting default was not preserved.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $installRoot 'User\JsScript\Unsubscribed')) {
+        throw 'An unsubscribed official package was installed.'
     }
 
     $backupPackage = Join-Path $backupRoot 'fixture\packages\Alpha'
