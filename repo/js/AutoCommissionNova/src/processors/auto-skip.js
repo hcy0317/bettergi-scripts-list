@@ -10,6 +10,50 @@ import { dispatchOnDialogOcr } from "../probes/index.js";
 
 import { defineStep } from "./define-step.js";
 const page = new BvPage();
+const backgroundInput = new PostMessage();
+
+function tryPhysicalInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function tryBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function pressKeyInBothModes(key) {
+    const messageSent = tryBackgroundInput(() => backgroundInput.keyPress(key));
+    const physicalSent = tryPhysicalInput(() => keyPress(key));
+    if (!messageSent && !physicalSent) {
+        throw new Error(`无法向游戏窗口发送按键: ${key}`);
+    }
+}
+
+function keyDownInBothModes(key) {
+    backgroundInput.keyDown(key);
+    tryPhysicalInput(() => keyDown(key));
+}
+
+function keyUpInBothModes(key) {
+    backgroundInput.keyUp(key);
+    tryPhysicalInput(() => keyUp(key));
+}
+
+function clickRegionInBothModes(region) {
+    const physicalSent = tryPhysicalInput(() => region.click());
+    if (!physicalSent) {
+        throw new Error("无法向游戏窗口发送对话点击");
+    }
+}
 
 function createAutoSkipConfig(priorityOptions) {
     const config = new AutoSkipConfig();
@@ -55,7 +99,7 @@ export default [
                 const npcWhiteList = Array.isArray(step.data?.npcWhiteList) ? step.data.npcWhiteList : [];
 
                 // 追踪任务描述，从当前任务描述中提取目标人名，作为白名单未命中时的兜底匹配源
-                keyPress("V");
+                pressKeyInBothModes("V");
                 await sleep(1000);
                 let extractedName = null;
                 const nameResults = bvPageOcrRegion(DIALOG_REGIONS.NPC_NAME);
@@ -92,26 +136,26 @@ export default [
                             for (let i = 0; i < matchedNPCs.length; i++) {
                                 const { element, matchedNPC } = matchedNPCs[i];
                                 log.info("找到白名单NPC: {npc}，点击该NPC", matchedNPC);
-                                keyDown("VK_MENU");
+                                keyDownInBothModes("VK_MENU");
                                 await sleep(200);
-                                element.click();
+                                clickRegionInBothModes(element);
                                 await sleep(100);
                                 leftButtonClick();
-                                keyUp("VK_MENU");
+                                keyUpInBothModes("VK_MENU");
                             }
                         } else if (matchedByName) {
                             log.info("点击包含提取到任务人名的选项: {text}", matchedByName.text);
-                            keyDown("VK_MENU");
+                            keyDownInBothModes("VK_MENU");
                             await sleep(200);
-                            matchedByName.click();
+                            clickRegionInBothModes(matchedByName);
                             await sleep(100);
                             leftButtonClick();
-                            keyUp("VK_MENU");
+                            keyUpInBothModes("VK_MENU");
                         } else {
                             log.info("未找到匹配的NPC，使用默认按F触发对话");
-                            keyPress("F");
+                            pressKeyInBothModes("F");
                             await sleep(100);
-                            keyPress("F");
+                            pressKeyInBothModes("F");
                             await sleep(400);
                         }
                     })

@@ -161,7 +161,7 @@ export async function loadCurrentCommissionsData() {
         return null;
     }
     const account = loadUserConfig(uid);
-    if (!account.commissions.length) {
+    if (!account.commissions.length || !isToday(account.timestamp)) {
         log.warn("当前UID没有可用委托数据，请先执行委托识别: {uid}", uid);
         return null;
     }
@@ -202,6 +202,7 @@ export async function saveCommissionsData(commissions) {
                 ...c,
                 location: existing?.location || c.location,
                 country: existing?.country || c.country,
+                status: existing?.status === "已完成" ? existing.status : c.status,
             };
         });
 
@@ -215,7 +216,7 @@ export async function saveCommissionsData(commissions) {
     } catch (error) {
         if (isCancellationError(error)) { throw error; }
         log.error("处理委托数据时出错: {error}", error.message);
-        return [];
+        throw error;
     }
 }
 

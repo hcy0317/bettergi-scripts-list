@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "preserveOfficialSettingDefaults": [
+    { "folder": "AutoCode", "settings": ["username"] },
+    { "folder": "AutoMonday", "settings": ["username"] },
+    { "folder": "CD-Aware-AutoGather", "settings": ["manualSetAccountName"] },
+    { "folder": "DailyHarvestStats", "settings": ["profile_id"] },
+    { "folder": "AccountSwitchStateMachine", "settings": ["targetUid"] },
+    { "folder": "JoinFriendsWorld", "settings": ["uid"] },
+    { "folder": "SwitchAccountMultipleMode", "settings": ["uid"] },
+    { "folder": "AutoEnter", "settings": ["enteringUID"] }
+  ],
+  "packages": [
+    {
+      "sourceFolder": "AutoCommissionNova",
+      "targetFolder": "HCY-AutoCommission",
+      "preserveFromFolder": "AutoCommission",
+      "preserveFiles": [
+        "Data/user-config.json",
+        "Data/account-state.json"
+      ],
+      "preserveSettingDefaults": [],
+      "revision": 3,
+      "requiredMarkers": [
+        {
+          "file": "src/core/main-process.js",
+          "text": "function validateRecognitionSnapshot(commissions)"
+        },
+        {
+          "file": "src/core/commission-executor.js",
+          "text": "completedCount + successCount === allCommissions.length"
+        },
+        {
+          "file": "src/utils/account-utils.js",
+          "text": "migrateLegacyUnifiedConfig(uid)"
+        }
+      ]
+    },
+    {
+      "sourceFolder": "FullyAutoAndSemiAutoTools",
+      "targetFolder": "HCY-FullyAutoAndSemiAutoTools",
+      "preserveFromFolder": "FullyAutoAndSemiAutoTools",
+      "preserveFiles": [
+        "config/record.json",
+        "config/PathRecord.json",
+        "config/path-json-by-uid.json",
+        "config/uidSettings.json"
+      ],
+      "preserveSettingDefaults": [],
+      "revision": 1,
+      "requiredMarkers": [
+        {
+          "file": "main.js",
+          "text": "pathingScript.isCancellationRequested"
+        },
+        {
+          "file": "utils/startup.js",
+          "text": "export function normalizeUid(value)"
+        }
+      ]
+    },
+    {
+      "sourceFolder": "角色养成一条龙",
+      "targetFolder": "HCY-角色养成一条龙",
+      "preserveFromFolder": "角色养成一条龙",
+      "preserveFiles": [
+        "completed_tasks.json"
+      ],
+      "preserveSettingDefaults": [],
+      "revision": 1,
+      "requiredMarkers": [
+        {
+          "file": "main.js",
+          "text": "function throwIfTaskFailures()"
+        }
+      ]
+    },
+    {
+      "sourceFolder": "AAA-Artifacts-Bulk-Supply",
+      "targetFolder": "HCY-AAA-Artifacts-Bulk-Supply",
+      "preserveFromFolder": "AAA-Artifacts-Bulk-Supply",
+      "preserveFiles": [],
+      "preserveSettingDefaults": [
+        "accountName"
+      ],
+      "revision": 1,
+      "requiredMarkers": [
+        {
+          "file": "main.js",
+          "text": "const [pathingResult] = await Promise.allSettled"
+        }
+      ]
+    }
+  ]
+}

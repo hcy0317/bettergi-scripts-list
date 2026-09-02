@@ -1,4 +1,6 @@
 import {toMainUi} from "./utils/tool";
+import {filterUsablePathNodes, selectUidValue, upsertUidValue} from "./utils/startup";
+import {getEffectiveSelectedOptions} from "./utils/route-selection";
 
 let manifest_json = "manifest.json";
 let manifest = undefined
@@ -52,6 +54,7 @@ const json_path_name = {
 // let RecordPathText = `${config_root}\\PathRecord.json`
 let RecordList = new Array()
 let RecordPathList = new Array()
+let recordStateInitialized = false
 let RecordLast = {
     uid: "",
     data: undefined,
@@ -72,6 +75,101 @@ let RecordPath = {
     uid: "",
     paths: new Set(), // 记录路径
     //{timestamp,path}
+}
+function toArray(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (value instanceof Set) return [...value];
+    if (typeof value !== "string" && typeof value[Symbol.iterator] === "function") return [...value];
+    return [value];
+}
+
+function normalizeRecordPath(value) {
+    const rawPath = typeof value === "string" ? value : value?.path;
+    if (typeof rawPath !== "string") return "";
+    return rawPath.trim().replace(/[\\/]+/g, "\\").replace(/\\+$/, "");
+}
+
+function normalizedRecordPathKey(value) {
+    return normalizeRecordPath(value).toLowerCase();
+}
+
+function isJsonRecordPath(value) {
+    return normalizedRecordPathKey(value).endsWith(".json");
+}
+
+function putLatestPathRecord(pathMap, item) {
+    if (!pathMap || !isJsonRecordPath(item)) return;
+    const key = normalizedRecordPathKey(item);
+    const timestamp = Number(item?.timestamp) || 0;
+    const existingItem = pathMap.get(key);
+    if (!existingItem || timestamp > existingItem.timestamp) {
+        pathMap.set(key, {
+            timestamp: timestamp,
+            path: normalizeRecordPath(item)
+        });
+    }
+}
+
+function uniqueStringList(...values) {
+    const result = [];
+    const seen = new Set();
+    for (const list of values) {
+        for (const item of toArray(list)) {
+            if (typeof item !== "string") continue;
+            const key = isJsonRecordPath(item) ? normalizedRecordPathKey(item) : item;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            result.push(isJsonRecordPath(item) ? normalizeRecordPath(item) : item);
+        }
+    }
+    return result;
+}
+
+function uniquePathItemList(...values) {
+    const result = [];
+    const seen = new Set();
+    for (const list of values) {
+        for (const item of toArray(list)) {
+            const key = isJsonRecordPath(item) ? normalizedRecordPathKey(item) : JSON.stringify(item);
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            if (typeof item === "string") {
+                result.push(isJsonRecordPath(item) ? normalizeRecordPath(item) : item);
+            } else if (item && typeof item === "object") {
+                result.push({
+                    ...item,
+                    path: isJsonRecordPath(item) ? normalizeRecordPath(item) : item.path
+                });
+            }
+        }
+    }
+    return result;
+}
+
+function normalizeGroupPaths(groupPaths) {
+    const groupMap = new Map();
+    for (const item of toArray(groupPaths)) {
+        if (!item) continue;
+        const name = typeof item === "string" ? item : item.name;
+        if (!name) continue;
+        const existingItem = groupMap.get(name) || {
+            ...(typeof item === "object" ? item : {}),
+            name: name,
+            paths: []
+        };
+        existingItem.paths = uniquePathItemList(existingItem.paths, item.paths);
+        groupMap.set(name, existingItem);
+    }
+    return [...groupMap.values()];
+}
+
+function mergeGroupPaths(...groupPathsList) {
+    const merged = [];
+    for (const groupPaths of groupPathsList) {
+        merged.push(...toArray(groupPaths));
+    }
+    return normalizeGroupPaths(merged);
 }
 const config_list = {
     black: [],
@@ -150,15 +248,20 @@ function loadPathJsonListByUid() {
     try {
         // 读取并解析JSON文件内容
         const raw = JSON.parse(file.readTextSync(json_path_name.pathJsonByUid));
-        // 将解析后的数组转换为Map对象
-        const map = new Map(raw);
-
-        // 获取当前用户ID对应的路径列表
-        const list = map.get(Record.uid);
+        // UID 在宿主中可能是数字，而 JSON Map 键可能是字符串；统一后再匹配。
+        const selected = selectUidValue(raw, Record.uid);
+        const list = selected.value;
         // 检查获取的列表是否为有效数组且不为空
         if (Array.isArray(list) && list.length > 0) {
             // 更新全局PATH_JSON_LIST变量
             PATH_JSON_LIST = list;
+            if (selected.usedFallback) {
+                file.writeTextSync(
+                    json_path_name.pathJsonByUid,
+                    JSON.stringify(upsertUidValue(raw, Record.uid, PATH_JSON_LIST))
+                );
+                log.info("[PATH] 已将旧空 UID 缓存迁移到 uid={0}", Record.uid);
+            }
             // 记录成功日志，包含用户ID和路径数量
             log.info(
                 "[PATH] 已加载 PATH_JSON_LIST，uid={0}，count={1}",
@@ -263,7 +366,7 @@ async function initRefresh(settingsConfig) {
 
             // 过滤JSON文件
             const filteredChildName = childName?.endsWith(".json") ? undefined : childName;
-            let child_names = Array.from(new Set(filteredChildName ? [filteredChildName] : []).difference(new Set(blacklist)))
+            let child_names = (filteredChildName ? [filteredChildName] : []).filter(name => blacklist.indexOf(name) === -1)
             // 获取父级名称用于建立层级关系
             const parentName = getChildFolderNameFromRoot(pathRun, parentLevel);
             const rootName = getChildFolderNameFromRoot(pathRun, parent_level + 1);
@@ -400,20 +503,19 @@ async function initRefresh(settingsConfig) {
 
     // ===== 保存 PATH_JSON_LIST（按 uid）=====
     try {
-        let pathJsonMap = new Map();
+        let raw = [];
 
         try {
-            const raw = JSON.parse(file.readTextSync(json_path_name.pathJsonByUid));
-            pathJsonMap = new Map(raw);
+            raw = JSON.parse(file.readTextSync(json_path_name.pathJsonByUid));
         } catch (e) {
             log.debug("PATH_JSON_LIST 映射文件不存在，将新建");
         }
 
-        pathJsonMap.set(Record.uid, PATH_JSON_LIST);
+        const updatedEntries = upsertUidValue(raw, Record.uid, PATH_JSON_LIST);
 
         file.writeTextSync(
             json_path_name.pathJsonByUid,
-            JSON.stringify([...pathJsonMap])
+            JSON.stringify(updatedEntries)
         );
 
         log.info(
@@ -541,7 +643,7 @@ async function loadUidSettingsMap(uidSettingsMap) {
 
                 if (highLevelFiltering) {
                     const set = new Set(highLevelFiltering.split("->"));
-                    keys = keys.union(set)
+                    keys = new Set([...keys, ...set])
                 }
 
                 // function countMatchingElements(mainSet, subset) {
@@ -688,19 +790,35 @@ async function initRun(config_run) {
         if (!multiJson || !multiJson.options || multiJson.options.length === 0) continue;
 
         const labelParentName = getBracketContent(multiJson.label); // [xxx]
-        const selectedOptions = multiJson.options;
+        const selectedOptions = getEffectiveSelectedOptions(settingsName, multiJson.options, multiCheckboxMap);
+        if (selectedOptions.length === 0) {
+            log.debug("[PATH] 跳过已由更深层选择覆盖的父级选项: {0}", settingsName);
+            continue;
+        }
 
-        // 2. 从 PATH_JSON_LIST 中筛选命中的路径
-        const filter = PATH_JSON_LIST.filter(item => item.children.length === 0);
-        await debugKey(`[init-run]_log-filtermatchedPaths.json`, JSON.stringify(filter))
-        let matchedPaths = filter.filter(item => {
+        // 2. 从 PATH_JSON_LIST 中筛选命中的路径。旧缓存可能残留空目录节点或
+        // 已被上游删除的路线文件；在交给宿主执行前验证，避免成片 ReadText/JSON 错误。
+        const candidatePaths = PATH_JSON_LIST.filter(item => {
             const hitParent = item.fullPathNames.includes(labelParentName) || labelParentName === `${pathingName}`;
             const hitOption = selectedOptions.some(opt =>
                 item.fullPathNames.some(name => name.includes(opt))
             );
 
-            return hitParent && hitOption;
-        }).map(item => {
+            return item.isFile === true && hitParent && hitOption;
+        });
+        const validatedPaths = filterUsablePathNodes(
+            candidatePaths,
+            path => file.readTextSyncOrThrow(path)
+        );
+        if (validatedPaths.skipped.length > 0) {
+            log.warn(
+                "[PATH] 忽略{0}个失效缓存路线，示例: {1}",
+                validatedPaths.skipped.length,
+                validatedPaths.skipped.slice(0, 3).map(item => `${item.path}: ${item.error}`).join(", ")
+            );
+        }
+        await debugKey(`[init-run]_log-filtermatchedPaths.json`, JSON.stringify(validatedPaths.usable))
+        let matchedPaths = validatedPaths.usable.map(item => {
             const selected = selectedOptions.find(opt =>
                 item.fullPathNames.some(name => name.includes(opt))
             );
@@ -802,7 +920,7 @@ async function initRun(config_run) {
             const nextMap = bodyList.length <= 0 ? new Map() : await cronUtil.getNextCronTimestampAll(bodyList, cd.http_api) ?? new Map();
             await debugKey(``, JSON.stringify({nextMap: [...nextMap]}), true)
             //还在cd中的path
-            const in_cd_paths = cdFilterMatchedPaths.filter(async item => {
+            const in_cd_paths = cdFilterMatchedPaths.filter(item => {
                 const timeConfig = timeConfigs.find(cfg =>
                     item.fullPathNames.includes(cfg.name)
                 );
@@ -822,7 +940,7 @@ async function initRun(config_run) {
                         // return (next && now >= next);
                         // const key = generatedKey(item);
                         const cron_ok = nextMap.get(item.path)
-                        return !(cron_ok?.ok); // 不应该在CD中时返回true
+                        return cron_ok === false; // 服务返回 true 表示区间内已到期，不应继续算作 CD 中
                     }
                     default:
                         return false;
@@ -1085,7 +1203,6 @@ async function init() {
     let utils = [
         "cron",
         "SwitchTeam",
-        "uid",
     ]
     for (let util of utils) {
         eval(file.readTextSync(`utils/${util}.js`));
@@ -1142,6 +1259,7 @@ async function init() {
     }
     //记录初始化
     await initRecord();
+    recordStateInitialized = true;
 
     // 读取现有配置并合并
     let uidSettingsMap = new Map()
@@ -1173,8 +1291,12 @@ async function init() {
             await main()
         }
     } finally {
-        await saveRecordPaths();
-        await saveRecord();
+        if (recordStateInitialized) {
+            await saveRecordPaths();
+            await saveRecord();
+        } else {
+            log.warn("记录尚未初始化，跳过保存，避免覆盖已有断点")
+        }
     }
 
 })()
@@ -1254,59 +1376,31 @@ async function main() {
  * 该函数将RecordPath对象中的Set类型数据转换为数组后保存到文件
  */
 async function saveRecordPaths() {
-    // 保存前将 Set 转换为数组，因为JSON不支持Set类型
-    // 创建一个新的记录对象，包含原始记录的所有属性
+    if (!Array.isArray(RecordPathList)) {
+        RecordPathList = toArray(RecordPathList);
+    }
+
+    const existingRecord = RecordPathList.find(item => item.uid === Record.uid);
+    const existingPaths = toArray(existingRecord?.paths);
+    const legacyNonJsonPaths = existingPaths.filter(item => !isJsonRecordPath(item));
+    const pathMap = new Map();
+
+    existingPaths.forEach(item => putLatestPathRecord(pathMap, item));
+    toArray(RecordPath.paths).forEach(item => putLatestPathRecord(pathMap, item));
+
     const recordToSave = {
-        // 使用展开运算符复制Record对象的所有属性，保持其他数据不变
+        ...(existingRecord || {}),
         ...RecordPath,
-        // 处理 paths 数组
-        paths: (() => {
-            // 1. 使用 Map 来辅助去重，Map 的 key 是 path，value 是完整的 item 对象
-            const pathMap = new Map();
-
-            // 假设 RecordPath.paths 是一个 Set，先转为数组进行遍历
-            [...RecordPath.paths].forEach(item => {
-                // 获取当前项的路径字符串
-                const currentPath = item.path;
-
-                // 检查 Map 中是否已经存在该路径
-                if (pathMap.has(currentPath)) {
-                    // 如果存在，比较时间戳
-                    const existingItem = pathMap.get(currentPath);
-                    // 如果当前项的时间戳比已存在的大，则更新 Map 中的值
-                    if (item.timestamp > existingItem.timestamp) {
-                        pathMap.set(currentPath, item);
-                    }
-                } else {
-                    // 如果不存在，直接存入 Map
-                    pathMap.set(currentPath, item);
-                }
-            });
-
-            // 2. 将 Map 中的值（去重后的对象数组）转换回我们需要的格式
-            return Array.from(pathMap.values()).map(item => ({
-                timestamp: item.timestamp,
-                path: item.path
-            }));
-        })()
+        uid: Record.uid,
+        paths: [
+            ...legacyNonJsonPaths,
+            ...Array.from(pathMap.values())
+        ]
     };
 
-    // 确保 RecordPathList 是数组
-    if (!Array.isArray(RecordPathList)) {
-        RecordPathList = Array.from(RecordPathList);
-    }
-    let temp = RecordPathList.find(item => item.uid === Record.uid)
-    if (temp) {
-        // RecordList.splice(RecordList.indexOf(temp),1)
-        temp.paths = [...recordToSave.paths, ...temp.paths]
-        // temp.errorPaths = [...recordToSave.errorPaths, ...temp.errorPaths]
-        // temp.groupPaths = [...recordToSave.groupPaths, ...temp.groupPaths]
-    } else {
-        // 将记录对象添加到记录列表中
-        RecordPathList.push(recordToSave)
-    }
-    // 将记录列表转换为JSON字符串并同步写入文件
-    file.writeTextSync(json_path_name.RecordPathText, JSON.stringify(RecordPathList))
+    RecordPathList = RecordPathList.filter(item => item.uid !== Record.uid);
+    RecordPathList.push(recordToSave);
+    file.writeTextSync(json_path_name.RecordPathText, JSON.stringify(RecordPathList));
     log.info("saveRecordPath保存记录文件成功")
 }
 
@@ -1315,28 +1409,42 @@ async function saveRecordPaths() {
  * 该函数在保存前会将Set类型的数据转换为数组格式，确保JSON序列化正常进行
  */
 async function saveRecord() {
-    // 保存前将 Set 转换为数组
-    // 创建一个新的记录对象，包含原始记录的所有属性
-    const recordToSave = {
-        // 使用展开运算符复制Record对象的所有属性
-        ...Record,
-        // 将paths Set转换为数组
-        paths: [...Record.paths],
-        // 将errorPaths Set转换为数组
-        errorPaths: [...Record.errorPaths],
-        // 将groupPaths Set转换为数组，并对每个元素进行特殊处理
-        groupPaths: [...Record.groupPaths].map(item => ({
-            // 保留name属性
-            name: item.name,
-            // 将item中的paths Set转换为数组
-            paths: [...item.paths]
-        }))
+    if (!Array.isArray(RecordList)) {
+        RecordList = toArray(RecordList);
+    }
+
+    const matchedRecords = RecordList.filter(item => item.uid === Record.uid && item.data === Record.data);
+    const otherRecords = RecordList.filter(item => !(item.uid === Record.uid && item.data === Record.data));
+    const latestExistingRecord = matchedRecords
+        .slice()
+        .sort((a, b) => (Number(a.timestamp) || 0) - (Number(b.timestamp) || 0))
+        .reduce((latest, item) => ({...latest, ...item}), {});
+
+    const currentStandardRecord = {
+        uid: Record.uid,
+        data: Record.data,
+        timestamp: Record.timestamp,
+        paths: uniqueStringList(Record.paths),
+        errorPaths: uniqueStringList(Record.errorPaths),
+        groupPaths: mergeGroupPaths(Record.groupPaths)
     };
 
-    // 将记录对象添加到记录列表中
-    RecordList.push(recordToSave)
-    // 将记录列表转换为JSON字符串并同步写入文件
-    file.writeTextSync(json_path_name.RecordText, JSON.stringify(RecordList))
+    const recordToSave = {
+        ...latestExistingRecord,
+        ...currentStandardRecord,
+        paths: uniqueStringList(...matchedRecords.map(item => item.paths), currentStandardRecord.paths),
+        errorPaths: uniqueStringList(...matchedRecords.map(item => item.errorPaths), currentStandardRecord.errorPaths),
+        groupPaths: mergeGroupPaths(...matchedRecords.map(item => item.groupPaths), currentStandardRecord.groupPaths)
+    };
+
+    Record.paths = new Set(recordToSave.paths);
+    Record.errorPaths = new Set(recordToSave.errorPaths);
+    Record.groupPaths = new Set(recordToSave.groupPaths.map(item => ({
+        ...item,
+        paths: new Set(toArray(item.paths))
+    })));
+    RecordList = [...otherRecords, recordToSave];
+    file.writeTextSync(json_path_name.RecordText, JSON.stringify(RecordList));
     log.info("saveRecord保存记录文件成功")
 }
 
@@ -1826,7 +1934,7 @@ async function runPath(path, root_name = "", parent_name = "", current_name = ""
     const hoeGroundKey = `${parent_name}->${current_name}`;
     const hoeGroundRootKey = `${root_name}->${parent_name}->${current_name}`;
     if (team.HoeGroundMap.has(hoeGroundRootKey) || team.HoeGroundMap.has(hoeGroundKey)) {
-        const hoeGroundName = team.HoeGroundMap.get(hoeGroundKey) || team.HoeGroundMap.get(hoeGroundKey);
+        const hoeGroundName = team.HoeGroundMap.get(hoeGroundRootKey) || team.HoeGroundMap.get(hoeGroundKey);
         await switchTeamByName(hoeGroundName);
     } else {
         const entry = [...SevenElement.SevenElementsMap.entries()].find(([key, val]) => {
@@ -1926,13 +2034,19 @@ async function runList(list = [], key = "", current_name = "", parent_name = "",
             // 执行单个路径，并传入停止标识
             await runPath(path, onePath.rootName, parent_name, current_name);
         } catch (error) {
+            if (pathingScript.isCancellationRequested) {
+                throw error;
+            }
             log.error('执行路径列表中的路径失败: {path}, 错误: {error}', path, error.message);
             Record.errorPaths.add(path)
-            throw new Error(error.message)
-            // continue; // 继续执行列表中的下一个路径
+            await saveRecord();
+            log.warn('已记录失败路径并跳过，继续执行下一个路径: {path}', path);
+            continue;
         }
         Record.paths.add(path)
         RecordPath.paths.add(value)
+        await saveRecordPaths();
+        await saveRecord();
     }
 
     log.debug(`[{mode}] 路径列表执行完成`, settings.mode);
@@ -2191,14 +2305,6 @@ function getFileOrFolderName(fullPath) {
     return parts[parts.length - 1];
 }
 
-function getParentFolderName(fullPath, upLevels = 1) {
-    // 返回上 N 级的文件夹名称
-    const parts = fullPath.split(/[\\/]/).filter(Boolean);
-    if (parts.length <= upLevels) return undefined;
-
-    const targetIndex = parts.length - 1 - upLevels;
-    return parts[targetIndex] || undefined;
-}
 
 async function treeToList(treeList = []) {
     let list = []

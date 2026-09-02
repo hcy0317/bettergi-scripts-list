@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "strategies": [
+    { "file": "00-高容错自动配队说明.md", "sha256": "3deb20a7b3a3320c7b1b060b4799e8d3ffa0e3ee3f4a04367c8f5fe1425e986b" },
+    { "file": "00-钟班香万.txt", "sha256": "3ff280935e740923d1cd6c58148eca01b909e17134d74ce369300071c510a96a" },
+    { "file": "00-钟迪绫万.txt", "sha256": "b9b13d629188e172c5e9e019a808d84409f996ff622ae48840848781d764804e" },
+    { "file": "00-钟芙琴万.txt", "sha256": "88af1b18c8d3fcc96db32bc0033bb8be37d585488150c00b189f67b8e5e16779" },
+    { "file": "00-钟纳久万.txt", "sha256": "c10d5bbbb1f95661089fc70c61f9791fdc8dd29766cfa99d29a99786b0cf22f7" },
+    { "file": "00-钟纳娜万.txt", "sha256": "63e0337f548fd9ef1906d0de75b78653383d7ecbf3232ae15db22af9d657f01d" },
+    { "file": "00-钟心那万.txt", "sha256": "d749c8c9bda675cdd2bd2d67105268a473d329b8d40d2db70840fc1193d02712" },
+    { "file": "00-钟心纳久.txt", "sha256": "cbed674da5ffb024cf0de4418b59e854ef44699a1a9cc6206102ea92c8bcd7ba" },
+    { "file": "00-钟心娜万.txt", "sha256": "a6cd0fb2b2847464dbae6c529235204148f7af5b7108e9f38da4094cca31bafd" },
+    { "file": "全配队通用（日常向）.txt", "sha256": "39f21efca8e41e47677ec0d69b486d552ea3f67b4c38c8f0800496ff59af3e3f" },
+    { "file": "万能战斗策略（萌新推荐）.txt", "sha256": "61be68b94300caebfc78354e017615eb7f576a2b3f3e278edfa136e485bf19f8" },
+    { "file": "种门（草行久钟）.txt", "sha256": "ca8756cbee9a6b5c8e6afda4b44273cb56b689f5d899c9108f7678fe5cdd4023" }
+  ]
+}

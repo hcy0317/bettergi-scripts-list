@@ -199,7 +199,7 @@ async function SwitchPartyMain(partyName, disableGoStatue) {
         await genshin.returnMainUi();
     }
 }
-this.switchUtil={
+globalThis.switchUtil={
     SwitchPartyMain
 }
 // /**

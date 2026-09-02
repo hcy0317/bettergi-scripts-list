@@ -5,6 +5,41 @@
 import { COMMISSION_STATUS, UI_REGIONS } from "../config/index.js";
 import { RO } from "./templates/index.js";
 
+const backgroundInput = new PostMessage();
+
+function tryPhysicalInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function tryBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function pressKeyInBothModes(key) {
+    const messageSent = tryBackgroundInput(() => backgroundInput.keyPress(key));
+    const physicalSent = tryPhysicalInput(() => keyPress(key));
+    if (!messageSent && !physicalSent) {
+        throw new Error(`无法向游戏窗口发送按键: ${key}`);
+    }
+}
+
+function clickInBothModes(x, y) {
+    const physicalSent = tryPhysicalInput(() => click(x, y));
+    if (!physicalSent) {
+        throw new Error(`无法向游戏窗口发送点击: ${x}, ${y}`);
+    }
+}
+
 /**
  * 检测是否在主界面
  *
@@ -75,9 +110,9 @@ export async function enterCommissionScreen() {
     try {
         const page = new BvPage();
 
-        await page.locator("委托", UI_REGIONS.COMMISSION_TAB).withRetryAction(() => keyPress("VK_F1")).waitFor();
+        await page.locator("委托", UI_REGIONS.COMMISSION_TAB).withRetryAction(() => pressKeyInBothModes("VK_F1")).waitFor();
 
-        await page.locator("每日委托奖励", UI_REGIONS.DAILY_COMMISSION_REWARD).withRetryAction(() => click(300, 350)).waitFor();
+        await page.locator("每日委托奖励", UI_REGIONS.DAILY_COMMISSION_REWARD).withRetryAction(() => clickInBothModes(300, 350)).waitFor();
         log.info("已进入委托界面");
         return true;
     } catch (error) {
@@ -102,16 +137,12 @@ export async function pageScroll(scrollCount) {
         const stepDistance = 10;
         for (let i = 0; i < scrollCount; ++i) {
             moveMouseTo(clickX, clickY);
-            await sleep(100);
-            leftButtonDown();
-            const steps = totalDistance / stepDistance;
-            for (let j = 0; j < steps; j++) {
-                moveMouseBy(0, -stepDistance);
-                await sleep(10);
-            }
-            await sleep(100);
-            leftButtonUp();
             await sleep(300);
+            for (let j = 0; j < 4; j++) {
+                verticalScroll(-1);
+                await sleep(150);
+            }
+            await sleep(500);
         }
         return true;
     } catch (error) {

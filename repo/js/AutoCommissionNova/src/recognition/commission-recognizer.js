@@ -9,6 +9,35 @@ import { getCommissionPosition, clickCommissionAndOpenMap, resolveCommissionName
 import { isCancellationError } from "../utils/error-utils.js";
 import { RO } from "../vision/index.js";
 
+const recognizerBackgroundInput = new PostMessage();
+
+function tryRecognizerPhysicalInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function tryRecognizerBackgroundInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
+function pressEscapeInBothModes() {
+    const messageSent = tryRecognizerBackgroundInput(
+        () => recognizerBackgroundInput.keyPress("VK_ESCAPE"));
+    const physicalSent = tryRecognizerPhysicalInput(() => keyPress("VK_ESCAPE"));
+    if (!messageSent && !physicalSent) {
+        throw new Error("无法向游戏窗口发送关闭详情页按键");
+    }
+}
+
 /**
  * 输出单个委托完成识别后的紧凑摘要。
  */
@@ -153,7 +182,7 @@ export async function recognizeCommissions(supportedCommissions) {
                 
                 //关闭详情页
                 await page.locator(RO.track)
-                    .withRetryAction(async () => { keyPress("VK_ESCAPE"); await sleep(500); })
+                    .withRetryAction(async () => { pressEscapeInBothModes(); await sleep(500); })
                     .waitForDisappear();
                 
                 const bigMapPosition = await getCommissionPosition();
@@ -162,7 +191,7 @@ export async function recognizeCommissions(supportedCommissions) {
                 // 关闭大地图返回委托页
                 await page.locator("每日委托奖励", UI_REGIONS.DAILY_COMMISSION_REWARD).withRetryAction(async () => {
                     log.debug("尝试从地图返回委托页面");
-                    keyPress("VK_ESCAPE");
+                    pressEscapeInBothModes();
                     await sleep(1000);
                 }).waitFor();
 

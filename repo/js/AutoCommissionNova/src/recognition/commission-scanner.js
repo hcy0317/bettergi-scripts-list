@@ -9,6 +9,17 @@ import { cleanText } from "../utils/text-utils.js";
 import { getPositionWithVoting } from "../navigation/position-utils.js";
 import { standardizeCommissionName } from "./commission-standardizer.js";
 
+const backgroundInput = new PostMessage();
+
+function tryPhysicalInput(action) {
+    try {
+        action();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 /**
  * 根据冒险历练启用状态选择委托名 OCR 区域
  *
@@ -97,9 +108,11 @@ export async function findCommissionIndex(targetName) {
  * @returns {Promise<void>}
  */
 export async function exitCommissionDetail(waitMs = 1200) {
-    keyDown("VK_ESCAPE");
+    backgroundInput.keyDown("VK_ESCAPE");
+    tryPhysicalInput(() => keyDown("VK_ESCAPE"));
     await sleep(300);
-    keyUp("VK_ESCAPE");
+    backgroundInput.keyUp("VK_ESCAPE");
+    tryPhysicalInput(() => keyUp("VK_ESCAPE"));
     await sleep(waitMs);
 }
 
@@ -132,7 +145,10 @@ export async function getCommissionPosition() {
 export async function clickCommissionAndOpenMap(page, index) {
     const button = COMMISSION_POSITIONING_BUTTONS[index];
     await page.locator(RO.track).withRetryAction(async () => {
-        click(button.x, button.y);
+        const physicalSent = tryPhysicalInput(() => click(button.x, button.y));
+        if (!physicalSent) {
+            throw new Error("无法向游戏窗口发送定位点击");
+        }
         await sleep(1500); // 打开大地图跳转有些微延迟
     }).waitFor();
 }

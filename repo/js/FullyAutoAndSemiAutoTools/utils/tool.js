@@ -1,4 +1,4 @@
-const commonPath = 'Assets/RecognitionObject/'
+const commonPath = 'assets/'
 const commonMap = new Map([
     ['main_ui', {
         path: `${commonPath}`,
@@ -40,19 +40,21 @@ export const isInMainUI = () => {
 };
 
 export async function toMainUi() {
-    let ms = 1000
-    let index = 1
+    const ms = 1000
+    const maxAttempts = 4
     await sleep(ms);
-    while (!isInMainUI()) {
+    if (isInMainUI()) {
+        return true;
+    }
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         await sleep(ms);
         await genshin.returnMainUi(); // 如果未启用，则返回游戏主界面
         await sleep(ms);
-        if (index > 3) {
-            throw new Error(`多次尝试返回主界面失败`);
+        if (isInMainUI()) {
+            return true;
         }
-        index += 1
     }
-
+    return false;
 }
-
 

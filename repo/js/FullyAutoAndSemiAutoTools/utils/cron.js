@@ -162,8 +162,8 @@ async function getNextCronTimestampAll(bodyJson = [{
     // 初始化结果列表，默认包含一个成功的空key项
     let resultList = [{key: '', ok: true,next:0}]
     // 发送HTTP POST请求并处理响应
-    resultList = (
-        await http.request("POST", url, JSON.stringify({cronList:bodyJson}), JSON.stringify({
+    try {
+        resultList = await http.request("POST", url, JSON.stringify({cronList:bodyJson}), JSON.stringify({
             "Content-Type": "application/json"
         })).then(res => {
             // 打印调试日志，记录响应内容
@@ -178,9 +178,15 @@ async function getNextCronTimestampAll(bodyJson = [{
                 // 如果响应代码不为200，抛出错误
                 throw new Error("请求失败,error:" + result_json?.message)
             }
-            return undefined
+            throw new Error(`请求失败,status_code:${res.status_code}`)
         })
-    )
+        if (!Array.isArray(resultList)) {
+            throw new Error("请求成功但未返回可用的 Cron 结果")
+        }
+    } catch (error) {
+        log.warn("CD 服务不可用，本轮按到期处理并继续执行路线: {error}", error?.message ?? String(error))
+        resultList = bodyJson.map(item => ({key: item.key, ok: true, next: 0}))
+    }
     // 创建一个Map对象，用于存储结果
     let map = new Map()
     // 遍历结果列表，将每个项的key和ok状态存入Map
@@ -337,7 +343,7 @@ function parseField(field, min, max) {
 }
 
 
-this.cronUtil = {
+globalThis.cronUtil = {
     getNextCronTimestamp,
     getNextCronTimestampAll
 }
