@@ -13,6 +13,16 @@ assert.equal(mappings.schemaVersion, 1);
 assert.equal(mappings.packages.length, 4);
 assert.equal(mappings.preserveOfficialSettingDefaults.length, 8);
 
+const cdAwareAutoGather = fs.readFileSync(
+    path.join(repoRoot, "repo", "js", "CD-Aware-AutoGather", "main.js"),
+    "utf8",
+);
+assert.match(
+    cdAwareAutoGather,
+    /HCY_ROUTE_FAILURE_CONTINUATION_BEGIN[\s\S]*pathingScript\.isCancellationRequested[\s\S]*throw error;[\s\S]*路线执行失败，跳过当前路线[\s\S]*continue;[\s\S]*HCY_ROUTE_FAILURE_CONTINUATION_END/,
+    "CD-Aware-AutoGather must continue ordinary route failures without swallowing cancellation",
+);
+
 const targetFolders = new Set();
 for (const entry of mappings.packages) {
     assert.match(entry.targetFolder, /^HCY-/);
