@@ -972,7 +972,28 @@ async function runPathTaskIfCooldownExpired(material, taskInfo) {
                 let pathStartPos = await genshin.getPositionFromMap(currentMap);
                 // 延迟抛出`UserCancelled`，以便正确更新运行记录
                 const pathStartTime = new Date();
-                let cancel = await runPathScriptFile(jsonPath);
+                let cancel;
+                // HCY_ROUTE_FAILURE_CONTINUATION_BEGIN
+                try {
+                    cancel = await runPathScriptFile(jsonPath);
+                } catch (error) {
+                    if (pathingScript.isCancellationRequested) {
+                        throw error;
+                    }
+
+                    log.error(`${progress}${pathName}: 路线执行失败，跳过当前路线: ${error}`);
+                    try {
+                        await genshin.returnMainUi();
+                    } catch (recoveryError) {
+                        if (pathingScript.isCancellationRequested) {
+                            throw recoveryError;
+                        }
+                        log.warn(`${progress}${pathName}: 路线失败后返回主界面失败，继续下一条路线: ${recoveryError}`);
+                    }
+                    logFakePathEnd(fileName, pathStart);
+                    continue;
+                }
+                // HCY_ROUTE_FAILURE_CONTINUATION_END
 
                 await genshin.returnMainUi();
                 let pathEndPos = await genshin.getPositionFromMap(currentMap);
