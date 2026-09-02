@@ -5,7 +5,9 @@
   "bgi_version": "0.61.0",
   "key": "PGCSBY37NJA",
   "description": "",
-  "saved_files": [],
+  "saved_files": [
+    "pathing/"
+  ],
   "authors": [
     {
       "name": "云端客",

@@ -13,12 +13,16 @@ try {
     $installedPackage = Join-Path $installRoot 'User\JsScript\Alpha'
     $officialAutoCode = Join-Path $officialRoot 'AutoCode'
     $installedAutoCode = Join-Path $installRoot 'User\JsScript\AutoCode'
+    $officialFullyAuto = Join-Path $officialRoot 'FullyAutoAndSemiAutoTools'
+    $installedFullyAuto = Join-Path $installRoot 'User\JsScript\FullyAutoAndSemiAutoTools'
+    $pathingTarget = Join-Path $installRoot 'User\AutoPathing'
+    $hcyPathingTarget = Join-Path $installRoot 'User\HcyAutoPathing'
     $officialUnsubscribed = Join-Path $officialRoot 'Unsubscribed'
     $subscriptionRoot = Join-Path $installRoot 'User\Subscriptions'
 
     New-Item -ItemType Directory -Path (Join-Path $officialPackage 'state') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $installedPackage 'state') -Force | Out-Null
-    New-Item -ItemType Directory -Path $officialAutoCode,$installedAutoCode,$officialUnsubscribed,$subscriptionRoot -Force | Out-Null
+    New-Item -ItemType Directory -Path $officialAutoCode,$installedAutoCode,$officialFullyAuto,$installedFullyAuto,$pathingTarget,$hcyPathingTarget,$officialUnsubscribed,$subscriptionRoot -Force | Out-Null
 
     Set-Content -LiteralPath (Join-Path $officialPackage 'manifest.json') -Encoding UTF8 -Value @'
 {
@@ -48,12 +52,22 @@ try {
     Set-Content -LiteralPath (Join-Path $installedAutoCode 'manifest.json') -Encoding UTF8 -Value '{"name":"AutoCode","version":"1.0.0","main":"main.js","saved_files":[]}'
     Set-Content -LiteralPath (Join-Path $installedAutoCode 'main.js') -Encoding UTF8 -Value 'const version = 1;'
     Set-Content -LiteralPath (Join-Path $installedAutoCode 'settings.json') -Encoding UTF8 -Value '[{"name":"username","default":"fixture-user"}]'
+    Set-Content -LiteralPath (Join-Path $officialFullyAuto 'manifest.json') -Encoding UTF8 -Value '{"name":"FullyAutoAndSemiAutoTools","version":"2.0.0","main":"main.js","saved_files":["pathing/"]}'
+    Set-Content -LiteralPath (Join-Path $officialFullyAuto 'main.js') -Encoding UTF8 -Value 'const version = 2;'
+    Set-Content -LiteralPath (Join-Path $installedFullyAuto 'manifest.json') -Encoding UTF8 -Value '{"name":"FullyAutoAndSemiAutoTools","version":"1.0.0","main":"main.js","saved_files":[]}'
+    Set-Content -LiteralPath (Join-Path $installedFullyAuto 'main.js') -Encoding UTF8 -Value 'const version = 1;'
+    Set-Content -LiteralPath (Join-Path $pathingTarget 'fixture-path.json') -Encoding UTF8 -Value '{"name":"fixture-path"}'
+    Set-Content -LiteralPath (Join-Path $hcyPathingTarget 'hcy-fixture-path.json') -Encoding UTF8 -Value '{"name":"hcy-fixture-path"}'
+    $pathingCanaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $pathingTarget 'fixture-path.json')).Hash
+    $hcyPathingCanaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $hcyPathingTarget 'hcy-fixture-path.json')).Hash
+    New-Item -ItemType Junction -Path (Join-Path $installedFullyAuto 'pathing') -Target $pathingTarget | Out-Null
     Set-Content -LiteralPath (Join-Path $officialUnsubscribed 'manifest.json') -Encoding UTF8 -Value '{"name":"Unsubscribed","version":"1.0.0","main":"main.js","saved_files":[]}'
     Set-Content -LiteralPath (Join-Path $officialUnsubscribed 'main.js') -Encoding UTF8 -Value 'throw new Error("must not install");'
     Set-Content -LiteralPath (Join-Path $subscriptionRoot 'bettergi-scripts-list.json') -Encoding UTF8 -Value @'
 [
   "js/Alpha",
   "js/AutoCode",
+  "js/FullyAutoAndSemiAutoTools",
   "pathing/敌人与魔物"
 ]
 '@
@@ -87,6 +101,13 @@ try {
     }
     if (Test-Path -LiteralPath (Join-Path $installRoot 'User\JsScript\Unsubscribed')) {
         throw 'An unsubscribed official package was installed.'
+    }
+    $officialPathingBridge = Get-Item -LiteralPath (Join-Path $installedFullyAuto 'pathing') -Force
+    if ($officialPathingBridge.LinkType -ne 'Junction') {
+        throw 'The official FullyAuto pathing bridge was expanded instead of preserved as a Junction.'
+    }
+    if ([System.IO.Path]::GetFullPath([string]$officialPathingBridge.Target) -ne [System.IO.Path]::GetFullPath($pathingTarget)) {
+        throw 'The official FullyAuto pathing Junction target changed during update.'
     }
 
     $backupPackage = Join-Path $backupRoot 'fixture\packages\Alpha'
@@ -128,6 +149,42 @@ try {
     $hcyManifest = Get-Content -LiteralPath (Join-Path $hcyFullyAuto 'manifest.json') -Raw | ConvertFrom-Json
     if (@($hcyManifest.saved_files) -notcontains 'config/uidSettings.json') {
         throw 'The generated HCY manifest does not retain its compatibility state contract.'
+    }
+    if (@($hcyManifest.saved_files) -notcontains 'pathing/') {
+        throw 'The generated HCY manifest does not retain its pathing bridge contract.'
+    }
+    $hcyPathingBridge = Get-Item -LiteralPath (Join-Path $hcyFullyAuto 'pathing') -Force
+    if ($hcyPathingBridge.LinkType -ne 'Junction') {
+        throw 'The HCY FullyAuto pathing bridge was expanded instead of preserved as a Junction.'
+    }
+    if ([System.IO.Path]::GetFullPath([string]$hcyPathingBridge.Target) -ne [System.IO.Path]::GetFullPath($pathingTarget)) {
+        throw 'The HCY FullyAuto pathing Junction target changed during update.'
+    }
+    if ((Get-Content -LiteralPath (Join-Path $hcyPathingBridge.FullName 'fixture-path.json') -Raw) -notmatch 'fixture-path') {
+        throw 'The HCY FullyAuto pathing bridge no longer reaches the shared pathing target.'
+    }
+
+    Remove-Item -LiteralPath $hcyPathingBridge.FullName -Force
+    New-Item -ItemType Junction -Path $hcyPathingBridge.FullName -Target $hcyPathingTarget | Out-Null
+    & $updater `
+        -OfficialSourceRoot $officialRoot `
+        -ForkRoot $repoRoot `
+        -BetterGIRoot $installRoot `
+        -BackupRoot $backupRoot `
+        -TransactionId 'fixture-hcy-repeat' `
+        -Apply `
+        -AllowRunningBetterGI | Out-Null
+
+    $repeatedHcyPathingBridge = Get-Item -LiteralPath (Join-Path $hcyFullyAuto 'pathing') -Force
+    if ($repeatedHcyPathingBridge.LinkType -ne 'Junction') {
+        throw 'The repeated HCY update did not preserve its pathing Junction.'
+    }
+    if ([System.IO.Path]::GetFullPath([string]$repeatedHcyPathingBridge.Target) -ne [System.IO.Path]::GetFullPath($hcyPathingTarget)) {
+        throw 'The legacy pathing bridge overrode the current HCY bridge during repeated update.'
+    }
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $pathingTarget 'fixture-path.json')).Hash -ne $pathingCanaryHash -or
+        (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $hcyPathingTarget 'hcy-fixture-path.json')).Hash -ne $hcyPathingCanaryHash) {
+        throw 'A preserved pathing Junction target was modified during update.'
     }
     $hcyArtifactSettings = Get-Content -LiteralPath (Join-Path $installRoot 'User\JsScript\HCY-AAA-Artifacts-Bulk-Supply\settings.json') -Raw | ConvertFrom-Json
     $accountName = @($hcyArtifactSettings | Where-Object { $_.name -eq 'accountName' })

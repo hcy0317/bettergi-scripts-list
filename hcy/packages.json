@@ -44,10 +44,11 @@
         "config/record.json",
         "config/PathRecord.json",
         "config/path-json-by-uid.json",
-        "config/uidSettings.json"
+        "config/uidSettings.json",
+        "pathing/"
       ],
       "preserveSettingDefaults": [],
-      "revision": 1,
+      "revision": 2,
       "requiredMarkers": [
         {
           "file": "main.js",

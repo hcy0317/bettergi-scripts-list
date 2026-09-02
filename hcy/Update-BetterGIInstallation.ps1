@@ -25,6 +25,46 @@ param(
 $ErrorActionPreference = 'Stop'
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+function Copy-FileSystemEntry {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Source,
+
+        [Parameter(Mandatory)]
+        [string]$Destination
+    )
+
+    $sourceItem = Get-Item -LiteralPath $Source -Force
+    $isReparsePoint = ($sourceItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+    if ($isReparsePoint) {
+        if ($sourceItem.LinkType -notin @('Junction', 'SymbolicLink')) {
+            throw "Unsupported reparse point type '$($sourceItem.LinkType)': $Source"
+        }
+        $linkTarget = [string]$sourceItem.Target
+        if ([string]::IsNullOrWhiteSpace($linkTarget)) {
+            throw "Link target is missing: $Source"
+        }
+        New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+        $existingTarget = Get-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        if ($null -ne $existingTarget) {
+            if (($existingTarget.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+                throw "Preserved link conflicts with a non-link staging entry: $Destination"
+            }
+            Remove-Item -LiteralPath $Destination -Force
+        }
+        New-Item -ItemType $sourceItem.LinkType -Path $Destination -Target $linkTarget -Force | Out-Null
+        return
+    }
+
+    if ($sourceItem.PSIsContainer) {
+        Copy-DirectoryContents -Source $sourceItem.FullName -Destination $Destination
+        return
+    }
+
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Destination) -Force | Out-Null
+    Copy-Item -LiteralPath $sourceItem.FullName -Destination $Destination -Force
+}
+
 function Copy-DirectoryContents {
     param(
         [Parameter(Mandatory)]
@@ -37,12 +77,7 @@ function Copy-DirectoryContents {
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     foreach ($child in Get-ChildItem -LiteralPath $Source -Force) {
         $target = Join-Path $Destination $child.Name
-        if ($child.PSIsContainer) {
-            Copy-DirectoryContents -Source $child.FullName -Destination $target
-        }
-        else {
-            Copy-Item -LiteralPath $child.FullName -Destination $target -Force
-        }
+        Copy-FileSystemEntry -Source $child.FullName -Destination $target
     }
 }
 
@@ -81,14 +116,20 @@ function Copy-PreservedFiles {
         $literalRelativePath = $normalizedPattern.TrimEnd('\')
         $literalSource = Join-Path $InstalledPackage $literalRelativePath
 
-        if ($normalizedPattern -notmatch '[*?[]' -and (Test-Path -LiteralPath $literalSource)) {
-            $literalTarget = Join-Path $StagedPackage $literalRelativePath
-            if (Test-Path -LiteralPath $literalSource -PathType Container) {
-                Copy-DirectoryContents -Source $literalSource -Destination $literalTarget
+        if ($normalizedPattern -notmatch '[*?[]') {
+            $literalItem = $null
+            try {
+                $literalItem = Get-Item -LiteralPath $literalSource -Force -ErrorAction Stop
             }
-            else {
-                New-Item -ItemType Directory -Path (Split-Path -Parent $literalTarget) -Force | Out-Null
-                Copy-Item -LiteralPath $literalSource -Destination $literalTarget -Force
+            catch [System.Management.Automation.ItemNotFoundException] {
+            }
+            catch [System.IO.FileNotFoundException] {
+            }
+            catch [System.IO.DirectoryNotFoundException] {
+            }
+            if ($null -ne $literalItem) {
+                $literalTarget = Join-Path $StagedPackage $literalRelativePath
+                Copy-FileSystemEntry -Source $literalItem.FullName -Destination $literalTarget
             }
             continue
         }
@@ -97,13 +138,7 @@ function Copy-PreservedFiles {
         foreach ($match in $matches) {
             $relativePath = [System.IO.Path]::GetRelativePath($InstalledPackage, $match.FullName)
             $target = Join-Path $StagedPackage $relativePath
-            if ($match.PSIsContainer) {
-                Copy-DirectoryContents -Source $match.FullName -Destination $target
-            }
-            else {
-                New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
-                Copy-Item -LiteralPath $match.FullName -Destination $target -Force
-            }
+            Copy-FileSystemEntry -Source $match.FullName -Destination $target
         }
     }
 }
@@ -343,7 +378,7 @@ if ($null -ne $hcyManifest) {
             destination = $installedPackage
             existed = Test-Path -LiteralPath $installedPackage -PathType Container
             savedFiles = @($savedFiles)
-            preserveSources = @($installedPackage, $legacyPackage | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+            preserveSources = @($legacyPackage, $installedPackage)
             preserveSettingDefaults = @($mapping.preserveSettingDefaults)
             settingsSource = if (Test-Path -LiteralPath $installedPackage -PathType Container) {
                 $installedPackage
