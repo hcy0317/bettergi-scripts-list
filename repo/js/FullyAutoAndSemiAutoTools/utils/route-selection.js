@@ -12,6 +12,9 @@ export function getEffectiveSelectedOptions(settingsName, selectedOptions, selec
         if (treeLevelDepth(childName) <= currentDepth) return false;
         const childOptions = Array.from(child?.options ?? []);
         if (childOptions.length === 0) return false;
-        return String(child?.label ?? "").includes(`[${option}]`);
+        const label = String(child?.label ?? "");
+        const normalizedOption = String(option ?? "").trim();
+        return label.includes(`《${normalizedOption}》`) ||
+            label.includes(`[${normalizedOption}]`);
     }));
 }
