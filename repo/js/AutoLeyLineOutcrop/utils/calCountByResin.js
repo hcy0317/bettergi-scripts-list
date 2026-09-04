@@ -443,8 +443,10 @@ async function openReplenishResinUi() {
     if (replenishResinButton) {
         replenishResinButton.Click();
         log.info("成功打开补充树脂界面");
+        return true;
     } else {
         log.warn("未找到补充树脂按钮");
+        return false;
     }
 }
 
@@ -482,15 +484,7 @@ this.countAllResin = async function () {
         await sleep(CONFIG.UI_DELAY);
         let tryPass = true;
         try {
-            log.info("[开始]统计补充树脂界面中的树脂");
             resinCounts.original = await countOriginalResin(false, false);
-            moveMouseTo(CONFIG.COORDINATES.AVOID_SELECTION.x, CONFIG.COORDINATES.AVOID_SELECTION.y)
-            await sleep(500);
-            resinCounts.transient = await countTransientResin();
-            resinCounts.fragile = await countFragileResin();
-            log.info("[完成]统计补充树脂界面中的树脂");
-            // 点击避免选中效果影响统计
-            click(CONFIG.COORDINATES.AVOID_SELECTION.x, CONFIG.COORDINATES.AVOID_SELECTION.y);
         } catch (e) {
             tryPass = false
         }
@@ -502,9 +496,9 @@ this.countAllResin = async function () {
             resinCounts.original = await countOriginalResin(!tryPass);
         }
         resinCounts.condensed = await countCondensedResin();
-        if (!tryPass) {
-            // 打开补充树脂界面统计须臾/脆弱树脂
-            await openReplenishResinUi();
+        // 须臾/脆弱树脂只显示在补充树脂页，不能用地图识别是否成功来决定是否打开该页面。
+        const replenishOpened = await openReplenishResinUi();
+        if (replenishOpened) {
             await sleep(CONFIG.UI_DELAY);
 
             // 点击避免选中效果影响统计
@@ -514,6 +508,8 @@ this.countAllResin = async function () {
             log.info("开始统计补充树脂界面中的树脂");
             resinCounts.transient = await countTransientResin();
             resinCounts.fragile = await countFragileResin();
+        } else {
+            log.warn("未能打开补充树脂界面，须臾/脆弱树脂数量保留为 0");
         }
         // 显示结果
         displayResults(resinCounts);

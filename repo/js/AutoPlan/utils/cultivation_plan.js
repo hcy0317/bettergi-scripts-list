@@ -99,7 +99,10 @@ async function observeOwnedByGrid(materialNamesByGrid, fallbackNames) {
         let result = {};
         log.info(`[计划驱动] 在 {0} 页复核 {1}`, gridScreenName, names.join("、"));
         try {
-            result = await countInventoryItems(names, gridScreenName);
+            const iconRecognitionMode = gridScreenName === "CharacterDevelopmentItems"
+                ? "Item"
+                : "GridIcon";
+            result = await countInventoryItems(names, gridScreenName, iconRecognitionMode);
         } catch (error) {
             log.error(`[计划驱动] {0} 页库存批量识别失败，将该页缺失项显式上报未知：{1}`,
                 gridScreenName,

@@ -402,17 +402,9 @@ export class Physical {
             // 打开地图界面统计原粹/浓缩树脂
             await Physical.openMap(); // 打开地图界面
             await sleep(CONFIG.UI_DELAY); // 等待界面加载
-            let tryPass = true; // 标记第一次尝试是否成功
+            let tryPass = true; // 标记地图原粹树脂第一次尝试是否成功
             try {
-                // Log.info("[开始]统计补充树脂界面中的树脂"); // 记录开始统计的日志
                 resinCounts.original = await Physical.countOriginalResin(false, false); // 统计原粹树脂数量
-                moveMouseTo(CONFIG.COORDINATES.AVOID_SELECTION.x, CONFIG.COORDINATES.AVOID_SELECTION.y) // 移动鼠标到指定位置
-                await sleep(500); // 等待500毫秒
-                resinCounts.transient = await Physical.countTransientResin(); // 统计须臾树脂数量
-                resinCounts.fragile = await Physical.countFragileResin(); // 统计脆弱树脂数量
-                Log.info("[完成]统计补充树脂界面中的树脂"); // 记录完成统计的日志
-                // 点击避免选中效果影响统计
-                click(CONFIG.COORDINATES.AVOID_SELECTION.x, CONFIG.COORDINATES.AVOID_SELECTION.y); // 点击指定位置
             } catch (e) {
                 tryPass = false // 如果发生异常，标记第一次尝试失败
             }
@@ -424,9 +416,9 @@ export class Physical {
                 resinCounts.original = await Physical.countOriginalResin(!tryPass); // 重新统计原粹树脂数量
             }
             resinCounts.condensed = await Physical.countCondensedResin(); // 统计浓缩树脂数量
-            if (!tryPass) {
-                // 打开补充树脂界面统计须臾/脆弱树脂
-                await Physical.openReplenishResinUi(); // 打开补充树脂界面
+            // 须臾/脆弱树脂只显示在补充树脂页，不能用地图识别是否成功来决定是否打开该页面。
+            const replenishOpened = await Physical.openReplenishResinUi();
+            if (replenishOpened) {
                 await sleep(CONFIG.UI_DELAY); // 等待界面加载
 
                 // 点击避免选中效果影响统计
@@ -436,6 +428,8 @@ export class Physical {
                 Log.info("开始统计补充树脂界面中的树脂"); // 记录开始统计的日志
                 resinCounts.transient = await Physical.countTransientResin(); // 统计须臾树脂数量
                 resinCounts.fragile = await Physical.countFragileResin(); // 统计脆弱树脂数量
+            } else {
+                Log.warn("未能打开补充树脂界面，须臾/脆弱树脂数量保留为 0");
             }
             // 显示结果
             Physical.displayResults(resinCounts); // 显示统计结果
@@ -486,8 +480,10 @@ export class Physical {
         if (replenishResinButton) {
             replenishResinButton.Click();
             Log.info("成功打开补充树脂界面");
+            return true;
         } else {
             Log.warn("未找到补充树脂按钮");
+            return false;
         }
     }
 

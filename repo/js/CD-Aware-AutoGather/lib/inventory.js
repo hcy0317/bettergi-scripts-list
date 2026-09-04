@@ -418,9 +418,13 @@ async function getItemCountWithApi(normalizedItemList, sharedOcrResults) {
     let results = {};
     for (const type in groupByType) {
         const names = groupByType[type];
+        const iconRecognitionMode = type === "Materials" || type === "CharacterDevelopmentItems"
+            ? "Item"
+            : "GridIcon";
         const countResult = await dispatcher.runTask(new SoloTask("CountInventoryItem", {
             "gridScreenName": type,
             "itemNames": names,
+            "iconRecognitionMode": iconRecognitionMode,
         }));
         Object.assign(results, countResult);
     }
@@ -445,6 +449,7 @@ async function getItemCountWithApi(normalizedItemList, sharedOcrResults) {
                 const retryCountResult = await dispatcher.runTask(new SoloTask("CountInventoryItem", {
                     "gridScreenName": type,
                     "itemNames": namesToRetry,
+                    "iconRecognitionMode": "Item",
                 }));
                 // 将重试结果合并到原始 results 中
                 Object.assign(results, retryCountResult);
