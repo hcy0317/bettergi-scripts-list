@@ -9,7 +9,7 @@ const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".
 
 async function createRuntime({
     failPosition = false, failRoute = false, failRecovery = false, cancel = false,
-    filter = "", exposeCancellation = true, paths, selectedRoutes = [],
+    filter = "", exposeCancellation = true, cancelAfterRoute = false, paths, selectedRoutes = [],
 } = {}) {
     const writes = new Map();
     const routes = [];
@@ -59,6 +59,7 @@ async function createRuntime({
                 routes.push(name);
                 if (cancel) { cancelled = true; throw new Error("用户取消"); }
                 if (failRoute && routes.length === 1) throw new Error("传送失败");
+                if (cancelAfterRoute) cancelled = true;
             },
         },
     });
@@ -113,6 +114,14 @@ test("cancellation also stops hosts without the optional pathing status property
     await assert.rejects(runtime.run(), /用户取消/);
     assert.equal(runtime.routes.length, 1);
     assert.equal(runtime.writes.size, 0);
+});
+
+test("cancellation after a completed route preserves its cooldown before stopping", async () => {
+    const runtime = await createRuntime({ cancelAfterRoute: true, exposeCancellation: false });
+    await assert.rejects(runtime.run(), error => error.name === "UserCancelled");
+    assert.equal(runtime.routes.length, 1);
+    assert.match(runtime.writes.get("record/test.txt"), /01\.json/);
+    assert.doesNotMatch(runtime.writes.get("record/test.txt"), /02\.json/);
 });
 
 test("gather attempts later materials before reporting partial failure", async () => {

@@ -988,7 +988,8 @@ async function runPathTaskIfCooldownExpired(material, taskInfo) {
                     pathStartPos = await genshin.getPositionFromMap(currentMap);
                     cancel = await runPathScriptFile(jsonPath);
                     await genshin.returnMainUi();
-                    await sleep(1);
+                    // 路线已结束后的取消沿用下方延迟取消流程，先保存已完成路线的冷却。
+                    if (!cancel) await sleep(1);
                     pathEndPos = await genshin.getPositionFromMap(currentMap);
                 } catch (error) {
                     // 标准 sleep 会检查宿主取消令牌，不依赖仅部分本体提供的状态扩展。
