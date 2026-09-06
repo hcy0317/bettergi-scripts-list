@@ -18,3 +18,24 @@ export function getEffectiveSelectedOptions(settingsName, selectedOptions, selec
             label.includes(`[${normalizedOption}]`);
     }));
 }
+
+export function selectRouteNodes(nodes, parentName, selectedOptions) {
+    const options = Array.from(selectedOptions ?? []);
+    return (Array.isArray(nodes) ? nodes : []).filter(item => {
+        if (item?.isFile !== true || !Array.isArray(item.fullPathNames)) return false;
+        const hitParent = parentName === "pathing" || item.fullPathNames.includes(parentName);
+        return hitParent && options.some(option =>
+            item.fullPathNames.some(name => typeof name === "string" && name.includes(option)));
+    });
+}
+
+// 缓存不包含新订阅的已选路线时，仅重扫一次；不改选择、CD 或其他 UID 的记录。
+export async function refreshSelectedRouteCache(cachedNodes, selections, scanPaths) {
+    const missing = selections.some(({ parentName, options }) =>
+        options.some(option => selectRouteNodes(cachedNodes, parentName, [option]).length === 0));
+    if (!missing) return { nodes: cachedNodes, refreshed: false };
+
+    const nodes = await scanPaths();
+    if (!Array.isArray(nodes)) throw new Error("当前订阅路线扫描结果无效");
+    return { nodes, refreshed: true };
+}

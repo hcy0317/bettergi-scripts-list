@@ -1,6 +1,6 @@
 import {toMainUi} from "./utils/tool";
 import {filterUsablePathNodes, selectUidValue, upsertUidValue} from "./utils/startup";
-import {getEffectiveSelectedOptions} from "./utils/route-selection";
+import {getEffectiveSelectedOptions, refreshSelectedRouteCache, selectRouteNodes} from "./utils/route-selection";
 
 let manifest_json = "manifest.json";
 let manifest = undefined
@@ -744,9 +744,7 @@ async function loadUidSettingsMap(uidSettingsMap) {
 
 async function initRun(config_run) {
     if (!loadPathJsonListByUid()) {
-        throw new Error(
-            "未找到 PATH_JSON_LIST，请先执行一次【刷新配置】"
-        );
+        PATH_JSON_LIST = [];
     }
     log.info(`初始{0}配置`, config_run)
     const cdPath = json_path_name.cdPath;
@@ -775,6 +773,20 @@ async function initRun(config_run) {
 
     log.debug(`settingsNameList:{0}`, JSON.stringify(settingsNameList))
 
+    const routeSelections = settingsNameList.map(name => {
+        const field = multiCheckboxMap.get(name);
+        return {
+            parentName: getBracketContent(field.label),
+            options: getEffectiveSelectedOptions(name, field.options, multiCheckboxMap),
+        };
+    });
+    const refreshed = await refreshSelectedRouteCache(PATH_JSON_LIST, routeSelections,
+        async () => treeToList(await readPaths(pathingName)));
+    PATH_JSON_LIST = refreshed.nodes;
+    if (refreshed.refreshed) {
+        log.info("[PATH] 已选路线未命中旧缓存，已从当前订阅重建本次索引，共{0}个节点", PATH_JSON_LIST.length);
+    }
+    let matchedRoutesBeforeCooldown = 0;
 
     // todo:补齐执行前配置
     // ================= 执行前配置（补齐 needRunMap） =================
@@ -798,18 +810,12 @@ async function initRun(config_run) {
 
         // 2. 从 PATH_JSON_LIST 中筛选命中的路径。旧缓存可能残留空目录节点或
         // 已被上游删除的路线文件；在交给宿主执行前验证，避免成片 ReadText/JSON 错误。
-        const candidatePaths = PATH_JSON_LIST.filter(item => {
-            const hitParent = item.fullPathNames.includes(labelParentName) || labelParentName === `${pathingName}`;
-            const hitOption = selectedOptions.some(opt =>
-                item.fullPathNames.some(name => name.includes(opt))
-            );
-
-            return item.isFile === true && hitParent && hitOption;
-        });
+        const candidatePaths = selectRouteNodes(PATH_JSON_LIST, labelParentName, selectedOptions);
         const validatedPaths = filterUsablePathNodes(
             candidatePaths,
             path => file.readTextSyncOrThrow(path)
         );
+        matchedRoutesBeforeCooldown += validatedPaths.usable.length;
         if (validatedPaths.skipped.length > 0) {
             log.warn(
                 "[PATH] 忽略{0}个失效缓存路线，示例: {1}",
@@ -1195,6 +1201,9 @@ async function initRun(config_run) {
             );
         }
         log.info("[执行前配置完成] needRunMap.size={0}", needRunMap.size);
+    }
+    if (routeSelections.some(selection => selection.options.length > 0) && matchedRoutesBeforeCooldown === 0) {
+        throw new Error("已选路线在当前订阅目录中没有可执行文件，请检查订阅或路线选择；本次未执行采集。");
     }
 }
 
