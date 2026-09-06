@@ -1158,10 +1158,12 @@ function getSelectedMaterials(configMap) {
                     return;
                 }
             } else {
-                // 如果 selectRoute 这一项用户什么都没勾，强制选择 entry.options 中的第一项
+                // 未指定路线时，先排除本次过滤不允许的组，再选择第一组。
                 if (entry.options && entry.options.length > 0 && selectedMaterials.hasOwnProperty(targetMaterial)) {
-                    finalRouteKeys = [entry.options[0]];
-                    logAction = "用户未指定路线，自动选择第一组";
+                    const firstAvailableRoute = entry.options.find(routeKey =>
+                        filterJsonFilesByKeywords(routeMap[routeKey] ?? [], targetMaterial).length > 0);
+                    finalRouteKeys = firstAvailableRoute === undefined ? [] : [firstAvailableRoute];
+                    logAction = "用户未指定路线，自动选择过滤后第一组";
                 }
             }
 

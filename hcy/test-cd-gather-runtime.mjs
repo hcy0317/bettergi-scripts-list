@@ -7,18 +7,22 @@ import { fileURLToPath } from "node:url";
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../repo/js/CD-Aware-AutoGather");
 
-async function createRuntime({ failPosition = false, failRoute = false, failRecovery = false, cancel = false, filter = "", exposeCancellation = true } = {}) {
+async function createRuntime({
+    failPosition = false, failRoute = false, failRecovery = false, cancel = false,
+    filter = "", exposeCancellation = true, paths, selectedRoutes = [],
+} = {}) {
     const writes = new Map();
     const routes = [];
     const logs = [];
     let positionReads = 0;
     let cancelled = false;
-    const routePaths = ["矿物\\虹滴晶\\01.json", "矿物\\虹滴晶\\02.json", "地方特产\\蒙德\\落落莓\\01.json",
+    const routePaths = paths ?? ["矿物\\虹滴晶\\01.json", "矿物\\虹滴晶\\02.json", "地方特产\\蒙德\\落落莓\\01.json",
         "食材与炼金\\甜甜花\\01.json", "食材与炼金\\薄荷\\01.json", "食材与炼金\\兽肉\\01.json"];
     const routeJson = JSON.stringify({ info: { map_name: "Teyvat" }, positions: [{ x: 0, y: 0 }] });
     const context = vm.createContext({
         settings: { runMode: "test", partyName: "采集", manualSetAccountName: "test",
             filterPathByKeywords: filter,
+            selectRoute_虹滴晶: selectedRoutes,
             selectForgingOre: ["虹滴晶"], selectLocalSpecialty_蒙德: ["落落莓"] },
         console,
         log: Object.fromEntries(["info", "debug", "warn", "error"].map(level => [level, (...args) => logs.push(args.join(" "))])),
@@ -127,4 +131,27 @@ test("a group route filter does not shrink the shared material selection schema"
     assert.deepEqual(foods?.options, ["薄荷", "兽肉", "甜甜花"]);
     await runtime.runGather();
     assert.deepEqual(runtime.routes, ["矿物\\虹滴晶\\01.json", "矿物\\虹滴晶\\02.json"]);
+});
+
+test("default route group is chosen from groups surviving the path filter", async () => {
+    const runtime = await createRuntime({ filter: "include:B",
+        paths: ["矿物\\虹滴晶\\A\\01.json", "矿物\\虹滴晶\\B\\02.json"] });
+    await runtime.runGather();
+    assert.deepEqual(runtime.routes, ["矿物\\虹滴晶\\B\\02.json"]);
+    const schema = JSON.parse(runtime.writes.get("settings.json"));
+    assert.deepEqual(schema.find(field => field.name === "selectRoute_虹滴晶").options, ["A", "B"]);
+});
+
+test("an explicitly selected excluded group is not replaced by an unselected one", async () => {
+    const runtime = await createRuntime({ filter: "include:B", selectedRoutes: ["A"],
+        paths: ["矿物\\虹滴晶\\A\\01.json", "矿物\\虹滴晶\\B\\02.json"] });
+    await runtime.runGather();
+    assert.deepEqual(runtime.routes, []);
+});
+
+test("default group order is unchanged without a path filter", async () => {
+    const runtime = await createRuntime({
+        paths: ["矿物\\虹滴晶\\A\\01.json", "矿物\\虹滴晶\\B\\02.json"] });
+    await runtime.runGather();
+    assert.deepEqual(runtime.routes, ["矿物\\虹滴晶\\A\\01.json"]);
 });
