@@ -1,0 +1,123 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import vm from "node:vm";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../repo/js/CD-Aware-AutoGather");
+
+async function createRuntime({ failPosition = false, failRoute = false, failRecovery = false, cancel = false, filter = "" } = {}) {
+    const writes = new Map();
+    const routes = [];
+    const logs = [];
+    let positionReads = 0;
+    let cancelled = false;
+    const routePaths = ["矿物\\虹滴晶\\01.json", "矿物\\虹滴晶\\02.json", "地方特产\\蒙德\\落落莓\\01.json",
+        "食材与炼金\\甜甜花\\01.json", "食材与炼金\\薄荷\\01.json", "食材与炼金\\兽肉\\01.json"];
+    const routeJson = JSON.stringify({ info: { map_name: "Teyvat" }, positions: [{ x: 0, y: 0 }] });
+    const context = vm.createContext({
+        settings: { runMode: "test", partyName: "采集", manualSetAccountName: "test",
+            filterPathByKeywords: filter,
+            selectForgingOre: ["虹滴晶"], selectLocalSpecialty_蒙德: ["落落莓"] },
+        console,
+        log: Object.fromEntries(["info", "debug", "warn", "error"].map(level => [level, (...args) => logs.push(args.join(" "))])),
+        setGameMetrics() {},
+        RealtimeTimer: function () {},
+        dispatcher: { addTimer() {} },
+        getAvatars: () => ["钟离"],
+        sleep: async () => { if (cancelled) throw new Error("用户取消"); },
+        file: {
+            IsExists: name => writes.has(name) || fs.existsSync(path.join(sourceRoot, name)),
+            readTextSync(name) {
+                if (writes.has(name)) return writes.get(name);
+                return fs.readFileSync(path.join(sourceRoot, name), "utf8");
+            },
+            ReadPathSync: () => [],
+            writeTextSync: (name, text) => writes.set(name, text),
+        },
+        genshin: {
+            tpToStatueOfTheSeven: async () => {},
+            switchParty: async () => true,
+            getPositionFromMap: async () => {
+                positionReads++;
+                if (failPosition && positionReads === 1) throw new Error("不在主界面，无法识别小地图坐标");
+                return { x: positionReads * 100, y: 0 };
+            },
+            returnMainUi: async () => { if (failRecovery) throw new Error("主界面恢复失败"); },
+        },
+        pathingScript: {
+            ReadPathSync: prefix => routePaths.filter(name => name.startsWith(prefix + "\\")),
+            IsFolder: () => false,
+            get isCancellationRequested() { return cancelled; },
+            readTextSync: () => routeJson,
+            runFileFromUser: async name => {
+                routes.push(name);
+                if (cancel) { cancelled = true; throw new Error("用户取消"); }
+                if (failRoute && routes.length === 1) throw new Error("传送失败");
+            },
+        },
+    });
+    await vm.runInContext(fs.readFileSync(path.join(sourceRoot, "main.js"), "utf8"), context);
+    vm.runInContext("worldInfo = { coOpMode: false }; currentParty = '采集';", context);
+    return {
+        writes, routes, logs,
+        runGather: () => vm.runInContext("runGatherMode()", context),
+        scan: () => vm.runInContext("runScanMode()", context),
+        async run() {
+            await vm.runInContext(`runPathTaskIfCooldownExpired("虹滴晶", {
+                current: 0, target: null,
+                tasks: [{ coolType: "46小时", recordFile: "record/test.txt", refreshTime: {},
+                    jsonFiles: ["矿物\\\\虹滴晶\\\\01.json", "矿物\\\\虹滴晶\\\\02.json"] }]
+            })`, context);
+        },
+    };
+}
+
+test("a route failure followed by failed UI recovery stops before the next route", async () => {
+    const runtime = await createRuntime({ failRoute: true, failRecovery: true });
+    await assert.rejects(runtime.run(), /主界面恢复失败/);
+    assert.equal(runtime.routes.length, 1);
+    assert.equal(runtime.writes.has("record/test.txt"), false);
+});
+
+test("position recognition failure is isolated to its route and does not consume cooldown", async () => {
+    const runtime = await createRuntime({ failPosition: true });
+    await runtime.run();
+    assert.deepEqual(runtime.routes, ["矿物\\虹滴晶\\02.json"]);
+    assert.match(runtime.writes.get("record/test.txt"), /02\.json/);
+    assert.doesNotMatch(runtime.writes.get("record/test.txt"), /01\.json/);
+});
+
+test("ordinary route failure continues later routes without recording a failed route", async () => {
+    const runtime = await createRuntime({ failRoute: true });
+    await runtime.run();
+    assert.equal(runtime.routes.length, 2);
+    assert.match(runtime.writes.get("record/test.txt"), /02\.json/);
+    assert.doesNotMatch(runtime.writes.get("record/test.txt"), /01\.json/);
+});
+
+test("user cancellation is not turned into a route failure", async () => {
+    const runtime = await createRuntime({ cancel: true });
+    await assert.rejects(runtime.run(), /用户取消/);
+    assert.equal(runtime.routes.length, 1);
+    assert.equal(runtime.writes.size, 0);
+});
+
+test("gather attempts later materials before reporting partial failure", async () => {
+    const runtime = await createRuntime({ failRoute: true });
+    await assert.rejects(runtime.runGather(), /路线.*失败/);
+    assert.deepEqual(runtime.routes, ["矿物\\虹滴晶\\01.json", "矿物\\虹滴晶\\02.json", "地方特产\\蒙德\\落落莓\\01.json"]);
+    assert.doesNotMatch(runtime.writes.get("record/test/矿物_虹滴晶.txt"), /01\.json/);
+    assert.match(runtime.writes.get("record/test/地方特产_蒙德_落落莓.txt"), /01\.json/);
+});
+
+test("a group route filter does not shrink the shared material selection schema", async () => {
+    const runtime = await createRuntime({ filter: "regex:虹滴晶" });
+    await runtime.scan();
+    const schema = JSON.parse(runtime.writes.get("settings.json"));
+    const foods = schema.find(field => field.name === "selectFoodAndAlchemy");
+    assert.deepEqual(foods?.options, ["薄荷", "兽肉", "甜甜花"]);
+    await runtime.runGather();
+    assert.deepEqual(runtime.routes, ["矿物\\虹滴晶\\01.json", "矿物\\虹滴晶\\02.json"]);
+});
