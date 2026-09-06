@@ -988,15 +988,20 @@ async function runPathTaskIfCooldownExpired(material, taskInfo) {
                     pathStartPos = await genshin.getPositionFromMap(currentMap);
                     cancel = await runPathScriptFile(jsonPath);
                     await genshin.returnMainUi();
+                    await sleep(1);
                     pathEndPos = await genshin.getPositionFromMap(currentMap);
                 } catch (error) {
-                    if (pathingScript.isCancellationRequested) {
+                    // 标准 sleep 会检查宿主取消令牌，不依赖仅部分本体提供的状态扩展。
+                    try {
+                        await sleep(1);
+                    } catch {
                         throw error;
                     }
 
                     log.error(`${progress}${pathName}: 路线执行失败，跳过当前路线: ${error}`);
                     // 只有恢复成功才能继续，恢复失败或取消由宿主结束当前脚本。
                     await genshin.returnMainUi();
+                    await sleep(1);
                     failedRoutes.push(jsonPath);
                     logFakePathEnd(fileName, pathStart);
                     continue;

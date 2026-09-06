@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../repo/js/CD-Aware-AutoGather");
 
-async function createRuntime({ failPosition = false, failRoute = false, failRecovery = false, cancel = false, filter = "" } = {}) {
+async function createRuntime({ failPosition = false, failRoute = false, failRecovery = false, cancel = false, filter = "", exposeCancellation = true } = {}) {
     const writes = new Map();
     const routes = [];
     const logs = [];
@@ -49,7 +49,7 @@ async function createRuntime({ failPosition = false, failRoute = false, failReco
         pathingScript: {
             ReadPathSync: prefix => routePaths.filter(name => name.startsWith(prefix + "\\")),
             IsFolder: () => false,
-            get isCancellationRequested() { return cancelled; },
+            get isCancellationRequested() { return exposeCancellation ? cancelled : undefined; },
             readTextSync: () => routeJson,
             runFileFromUser: async name => {
                 routes.push(name);
@@ -99,6 +99,13 @@ test("ordinary route failure continues later routes without recording a failed r
 
 test("user cancellation is not turned into a route failure", async () => {
     const runtime = await createRuntime({ cancel: true });
+    await assert.rejects(runtime.run(), /用户取消/);
+    assert.equal(runtime.routes.length, 1);
+    assert.equal(runtime.writes.size, 0);
+});
+
+test("cancellation also stops hosts without the optional pathing status property", async () => {
+    const runtime = await createRuntime({ cancel: true, exposeCancellation: false });
     await assert.rejects(runtime.run(), /用户取消/);
     assert.equal(runtime.routes.length, 1);
     assert.equal(runtime.writes.size, 0);
