@@ -76,7 +76,8 @@ async function runScanMode() {
     const configMap = {};
 
     // 扫描地方特产
-    const { countryToSpecialties, specialtyToFiles } = scanLocalSpecialty();
+    // 选项表和 CSV 目录由所有订阅路线生成，不受某一个配置组的运行过滤条件影响。
+    const { countryToSpecialties, specialtyToFiles } = scanLocalSpecialty(false);
     const localSpecialtyByCountry = {};
     for (const [country, specialties] of Object.entries(countryToSpecialties)) {
         localSpecialtyByCountry[country] = {};
@@ -98,7 +99,7 @@ async function runScanMode() {
     config = config.concat(cfgLocalSpecialtyByCountry);
 
     // 扫描食材与炼金材料
-    const otherJsonFiles = scanAndFilterJsonFiles("食材与炼金");
+    const otherJsonFiles = scanAndFilterJsonFiles("食材与炼金", false);
     const otherMaterialByNameAll = await groupByMaterialName(otherJsonFiles);
     // 过滤掉特殊类别
     const otherMaterialByName = Object.keys(otherMaterialByNameAll).reduce((acc, k) => {
@@ -126,7 +127,7 @@ async function runScanMode() {
         config.push(cfgOtherMaterial);
     }
 
-    const forgingOreJsonFiles = scanAndFilterJsonFiles("矿物");
+    const forgingOreJsonFiles = scanAndFilterJsonFiles("矿物", false);
     const forgingOreByname = await groupByMaterialName(forgingOreJsonFiles);
     // 魔晶矿的刷新机制特殊，需要与铁匠对话后人工判定，暂不支持
     delete forgingOreByname["魔晶矿"];
@@ -217,7 +218,7 @@ async function runGatherMode() {
     const selectedMaterials = getSelectedMaterials(configMap);
     const materialNames = Object.keys(selectedMaterials);
     if (materialNames.length === 0) {
-        log.error("未选择任何材料，请在脚本配置中勾选所需项目");
+        log.error("未选择任何材料，或所选材料的路线均被过滤，请检查脚本配置");
         return;
     }
     log.info("共选中{0}种材料: {1}", materialNames.length, materialNames.join(", "));
@@ -271,8 +272,12 @@ async function runGatherMode() {
     // 开始实际采集
     dispatcher.addTimer(new RealtimeTimer("AutoPick"));
     try {
+        const failedRoutes = [];
         for (const [name, taskInfo] of Object.entries(sortedTasksToRun)) {
-            await runPathTaskIfCooldownExpired(name, taskInfo);
+            failedRoutes.push(...await runPathTaskIfCooldownExpired(name, taskInfo));
+        }
+        if (failedRoutes.length > 0) {
+            throw new Error(`${failedRoutes.length}条采集路线执行失败，其余路线已继续尝试；失败路线未写入冷却记录：${failedRoutes.join(", ")}`);
         }
     } catch (e) {
         if (e instanceof ReachStopTime) {
@@ -295,10 +300,13 @@ async function getAccount() {
     return account;
 }
 
-function scanAndFilterJsonFiles(folderPath) {
+function scanAndFilterJsonFiles(folderPath, applyFilter = true) {
     const jsonFiles = getFilesInAutoPathing(folderPath);
     jsonFiles.sort((a, b) => a.localeCompare(b, "zh", { numeric: true }));
+    return applyFilter ? filterJsonFilesByKeywords(jsonFiles, folderPath) : jsonFiles;
+}
 
+function filterJsonFilesByKeywords(jsonFiles, folderPath) {
     const filterConfig = settings.filterPathByKeywords;
     if (!filterConfig || !filterConfig.trim()) return jsonFiles;
 
@@ -524,12 +532,12 @@ function scanSpecialCollectMethod(jsonFiles) {
 }
 
 // 扫描地方特产并按国家排序
-function scanLocalSpecialty() {
+function scanLocalSpecialty(applyFilter = true) {
     const countryToSpecialtiesRaw = {}; // 暂存 国家 -> Set(特产名)
     const specialtyToFiles = {}; // 映射 特产名 -> [路径列表]
     const separator = "\\";
 
-    const jsonFiles = scanAndFilterJsonFiles("地方特产");
+    const jsonFiles = scanAndFilterJsonFiles("地方特产", applyFilter);
     // 1. 遍历并归类数据
     jsonFiles.forEach((path) => {
         const parts = path.split(separator);
@@ -902,6 +910,7 @@ async function runPathScriptFile(jsonPath) {
 async function runPathTaskIfCooldownExpired(material, taskInfo) {
     let { current } = taskInfo;
     const { target, tasks } = taskInfo;
+    const failedRoutes = [];
     const totalPathCount = tasks.reduce((sum, t) => sum + t.jsonFiles.length, 0);
     log.info("{0}有{1}组任务，共{2}条路线", material, tasks.length, totalPathCount);
 
@@ -969,34 +978,37 @@ async function runPathTaskIfCooldownExpired(material, taskInfo) {
                 }
 
                 let pathStart = logFakePathStart(fileName);
-                let pathStartPos = await genshin.getPositionFromMap(currentMap);
+                let pathStartPos;
+                let pathEndPos;
                 // 延迟抛出`UserCancelled`，以便正确更新运行记录
                 const pathStartTime = new Date();
                 let cancel;
                 // HCY_ROUTE_FAILURE_CONTINUATION_BEGIN
                 try {
+                    pathStartPos = await genshin.getPositionFromMap(currentMap);
                     cancel = await runPathScriptFile(jsonPath);
+                    await genshin.returnMainUi();
+                    // 路线已结束后的取消沿用下方延迟取消流程，先保存已完成路线的冷却。
+                    if (!cancel) await sleep(1);
+                    pathEndPos = await genshin.getPositionFromMap(currentMap);
                 } catch (error) {
-                    if (pathingScript.isCancellationRequested) {
+                    // 标准 sleep 会检查宿主取消令牌，不依赖仅部分本体提供的状态扩展。
+                    try {
+                        await sleep(1);
+                    } catch {
                         throw error;
                     }
 
                     log.error(`${progress}${pathName}: 路线执行失败，跳过当前路线: ${error}`);
-                    try {
-                        await genshin.returnMainUi();
-                    } catch (recoveryError) {
-                        if (pathingScript.isCancellationRequested) {
-                            throw recoveryError;
-                        }
-                        log.warn(`${progress}${pathName}: 路线失败后返回主界面失败，继续下一条路线: ${recoveryError}`);
-                    }
+                    // 只有恢复成功才能继续，恢复失败或取消由宿主结束当前脚本。
+                    await genshin.returnMainUi();
+                    await sleep(1);
+                    failedRoutes.push(jsonPath);
                     logFakePathEnd(fileName, pathStart);
                     continue;
                 }
                 // HCY_ROUTE_FAILURE_CONTINUATION_END
 
-                await genshin.returnMainUi();
-                let pathEndPos = await genshin.getPositionFromMap(currentMap);
                 let distance = calculateDistance(pathStartPos, pathEndPos);
                 if (distance === null) {
                     const timeDiff = (new Date() - pathStartTime) / 1000;
@@ -1056,6 +1068,7 @@ async function runPathTaskIfCooldownExpired(material, taskInfo) {
             }
         }
     }
+    return failedRoutes;
 }
 
 function getSelectedMaterials(configMap) {
@@ -1146,10 +1159,12 @@ function getSelectedMaterials(configMap) {
                     return;
                 }
             } else {
-                // 如果 selectRoute 这一项用户什么都没勾，强制选择 entry.options 中的第一项
+                // 未指定路线时，先排除本次过滤不允许的组，再选择第一组。
                 if (entry.options && entry.options.length > 0 && selectedMaterials.hasOwnProperty(targetMaterial)) {
-                    finalRouteKeys = [entry.options[0]];
-                    logAction = "用户未指定路线，自动选择第一组";
+                    const firstAvailableRoute = entry.options.find(routeKey =>
+                        filterJsonFilesByKeywords(routeMap[routeKey] ?? [], targetMaterial).length > 0);
+                    finalRouteKeys = firstAvailableRoute === undefined ? [] : [firstAvailableRoute];
+                    logAction = "用户未指定路线，自动选择过滤后第一组";
                 }
             }
 
@@ -1167,7 +1182,10 @@ function getSelectedMaterials(configMap) {
         }
     });
 
-    return selectedMaterials;
+    // 过滤只作用于本次待执行路线，不回写或缩减共享的选项表。
+    return Object.fromEntries(Object.entries(selectedMaterials)
+        .map(([name, paths]) => [name, filterJsonFilesByKeywords(paths, name)])
+        .filter(([, paths]) => paths.length > 0));
 }
 
 /**

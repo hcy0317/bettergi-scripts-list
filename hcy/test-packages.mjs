@@ -19,7 +19,7 @@ const cdAwareAutoGather = fs.readFileSync(
 );
 assert.match(
     cdAwareAutoGather,
-    /HCY_ROUTE_FAILURE_CONTINUATION_BEGIN[\s\S]*pathingScript\.isCancellationRequested[\s\S]*throw error;[\s\S]*路线执行失败，跳过当前路线[\s\S]*continue;[\s\S]*HCY_ROUTE_FAILURE_CONTINUATION_END/,
+    /HCY_ROUTE_FAILURE_CONTINUATION_BEGIN[\s\S]*await sleep\(1\)[\s\S]*throw error;[\s\S]*路线执行失败，跳过当前路线[\s\S]*continue;[\s\S]*HCY_ROUTE_FAILURE_CONTINUATION_END/,
     "CD-Aware-AutoGather must continue ordinary route failures without swallowing cancellation",
 );
 
