@@ -1,4 +1,9 @@
 import {getJsonPath, toMainUi, throwError, findImgAndClick, Log, drawBoxDebug} from "./tool";
+function isTerminalTaskError(error) {
+    return /BGI_COMBAT_UNCONFIRMED|OperationCanceledException|TaskCanceledException|NormalEndException|UserCancelled|取消|cancelled|canceled/i
+        .test(String(error?.message ?? error) + " " + String(error?.name ?? ""));
+}
+
 //====================================================
 const genshinJson = {
     width: 1920,//genshin.width,
@@ -200,7 +205,7 @@ export class Physical {
             let res = region3.find(recognitionObjectOcr);
 
             Log.debug(`[OCR原粹树脂]识别结果: ${res.text}, 原始坐标: x=${res.x}, y=${res.y},width:${res.width},height:${res.height}`);
-            let text = "0"
+            let text = ""
 
             if (!res.text.includes('/')) {
                 //识别异常处理 误识别 /200 => 1200 (/被误识别为1)
@@ -216,7 +221,8 @@ export class Physical {
             }
 
 
-            let current = await Physical.saveOnlyNumber(text)
+            let current = await Physical.saveOnlyNumber(text, -1)
+            if (current < 0) throw new Error("原粹树脂数量未识别，不能当作零库存");
             let execute = (current - minPhysical) >= 0
             Log.debug(`最小可执行原粹树脂:{min},原粹树脂:{key}`, minPhysical, current,)
 
@@ -274,7 +280,7 @@ export class Physical {
         const condensedResin = await Physical.recognizeImage(RESIN_ICONS.CONDENSED);
         if (!condensedResin) {
             Log.warn(`未找到浓缩树脂图标`);
-            return 0;
+            return -1;
         }
 
         const ocrRegion = {
@@ -330,7 +336,7 @@ export class Physical {
         }
 
         Log.warn(`未能识别浓缩树脂数量`);
-        return 0;
+        return -1;
     }
 
     /**
@@ -341,7 +347,7 @@ export class Physical {
         const transientResin = await Physical.recognizeImage(RESIN_ICONS.TRANSIENT);
         if (!transientResin) {
             Log.warn(`未找到须臾树脂图标`);
-            return 0;
+            return -1;
         }
 
         const ocrRegion = {
@@ -362,7 +368,7 @@ export class Physical {
         const fragileResin = await Physical.recognizeImage(RESIN_ICONS.FRAGILE);
         if (!fragileResin) {
             Log.warn(`未找到脆弱树脂图标`);
-            return 0;
+            return -1;
         }
 
         const ocrRegion = {
@@ -387,14 +393,15 @@ export class Physical {
      */
     static async countAllResin() {
         let shouldRestoreMainUi = false // 标记是否需要恢复主界面
+        let terminalExit = false;
         try {
             // setGameMetrics(1920, 1080, 1); // 设置游戏显示参数
             // Log.info("开始统计树脂数量"); // 记录开始统计的日志
             let resinCounts = { // 存储各种树脂数量的对象
-                original: 0, // 原粹树脂数量
-                transient: 0, // 须臾树脂数量
-                fragile: 0, // 脆弱树脂数量
-                condensed: 0 // 浓缩树脂数量
+                original: -1, // 负数表示未知，不等于背包为零
+                transient: -1,
+                fragile: -1,
+                condensed: -1
             }
             await toMainUi(); // 切换到主界面
             await sleep(CONFIG.UI_DELAY); // 等待界面加载
@@ -406,6 +413,7 @@ export class Physical {
             try {
                 resinCounts.original = await Physical.countOriginalResin(false, false); // 统计原粹树脂数量
             } catch (e) {
+                if (isTerminalTaskError(e)) throw e;
                 tryPass = false // 如果发生异常，标记第一次尝试失败
             }
             await sleep(CONFIG.UI_DELAY); // 等待界面加载
@@ -429,7 +437,7 @@ export class Physical {
                 resinCounts.transient = await Physical.countTransientResin(); // 统计须臾树脂数量
                 resinCounts.fragile = await Physical.countFragileResin(); // 统计脆弱树脂数量
             } else {
-                Log.warn("未能打开补充树脂界面，须臾/脆弱树脂数量保留为 0");
+                Log.warn("未能打开补充树脂界面，须臾/脆弱树脂数量保持未知");
             }
             // 显示结果
             Physical.displayResults(resinCounts); // 显示统计结果
@@ -447,10 +455,11 @@ export class Physical {
             };
 
         } catch (error) { // 捕获异常
+            terminalExit = isTerminalTaskError(error);
             Log.error(`统计树脂数量时发生异常: ${error.message}`); // 记录错误信息
             throw error; // 抛出异常
         } finally { // 无论是否发生异常都会执行
-            if (shouldRestoreMainUi) { // 如果需要恢复主界面
+            if (shouldRestoreMainUi && !terminalExit) { // 已终止时不再发起界面操作
                 await toMainUi(); // 切换到主界面
                 await sleep(CONFIG.UI_DELAY); // 等待界面加载
             }
@@ -524,7 +533,7 @@ export class Physical {
         const originalResin = await Physical.recognizeImage(RESIN_ICONS.ORIGINAL);
         if (!originalResin) {
             Log.warn(`未找到原粹树脂图标`);
-            return 0;
+            return -1;
         }
 
         const ocrRegion = {
@@ -542,7 +551,7 @@ export class Physical {
         }
 
         Log.warn(`未能识别原粹树脂数量`);
-        return 0;
+        return -1;
     }
 
     /**
@@ -569,7 +578,7 @@ export class Physical {
         }
 
         Log.warn(`未能识别${resinType}数量`);
-        return 0;
+        return -1;
     }
 
     /**
@@ -604,6 +613,7 @@ export class Physical {
                     return imageResult;
                 }
             } catch (error) {
+                if (isTerminalTaskError(error)) throw error;
                 Log.error(`识别图像时发生异常: ${error.message}`);
             } finally {
                 // 确保游戏区域资源被正确释放
