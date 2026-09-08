@@ -1,5 +1,6 @@
 {
   "manifest_version": 1,
+  "self_managed_completion": true,
   "name": "带CD管理和目标设定的自动采集",
   "_version_note": "更新版本号时请一并更新README的问题反馈链接中的版本号",
   "version": "2.8.0",
