@@ -194,6 +194,27 @@ test("the boss adapter returns actual native rewards to the plan result", async 
     assert.equal(result.succeeded, true);
 });
 
+test("an ordinary boss failure recovers before reporting authoritative inventory", async () => {
+    const runtime = await createRuntime({ nextActions: [bossAction],
+        boss: () => { throw new Error("奖励识别超时"); } });
+    await assert.rejects(runtime.run(), /奖励识别超时/);
+    assert(runtime.events.slice(runtime.events.indexOf("boss")).includes("statue"));
+    const result = runtime.submissions.find(body => body.idempotencyKey === "boss-1:result");
+    assert.equal(result.observedOwned, 10);
+    assert.equal(result.succeeded, false);
+    assert.equal(runtime.claims.length, 1);
+});
+
+test("a legacy void boss result relies on the inventory ledger instead of declaring no rewards", async () => {
+    const runtime = await createRuntime({ nextActions: [bossAction], boss: () => undefined });
+    await runtime.run();
+    const result = runtime.submissions.find(body => body.idempotencyKey === "boss-1:result");
+    assert.equal(result.observedOwned, 10);
+    assert.deepEqual(result.rewards, {});
+    assert.equal(result.terminationReason, "COMPLETED:INVENTORY_RECONCILED");
+    assert.equal(runtime.claims.length, 2);
+});
+
 test("terminal inventory scan errors propagate without another scan or a success report", async () => {
     const runtime = await createRuntime({ scan: () => { throw new Error("[BGI_COMBAT_UNCONFIRMED] stop"); } });
     await assert.rejects(runtime.reconcile(), /BGI_COMBAT_UNCONFIRMED/);

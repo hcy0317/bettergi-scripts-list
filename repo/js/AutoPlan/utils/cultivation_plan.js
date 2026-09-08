@@ -234,8 +234,11 @@ async function executeAction(baseUrl, action, executorId, token) {
 
     let executionError = null;
     let rewards = {};
+    let rewardReportAvailable = false;
     try {
-        rewards = toPlainRewards(await handler.run(plan[handler.target]));
+        const nativeRewards = await handler.run(plan[handler.target]);
+        rewardReportAvailable = nativeRewards != null;
+        rewards = toPlainRewards(nativeRewards);
         log.info(`[计划驱动] 实际奖励：{0}`, JSON.stringify(rewards));
     } catch (error) {
         executionError = error;
@@ -243,7 +246,10 @@ async function executeAction(baseUrl, action, executorId, token) {
     }
 
     let observedOwned = null;
-    if (!executionError) try {
+    if (!isTerminalAutomationError(executionError)) try {
+        // Ordinary failures may follow a partial reward. Confirm a safe page
+        // before scanning; never scan after cancellation or unconfirmed combat.
+        if (executionError) await genshin.ReturnMainUi();
         observedOwned = await observeOwned(action.materialName, action.reconcileGrid);
         log.info(`[计划驱动] 权威库存复核：{0}={1}`, action.materialName, observedOwned);
     } catch (error) {
@@ -251,17 +257,21 @@ async function executeAction(baseUrl, action, executorId, token) {
         log.error(`[计划驱动] 背包复核失败：{0}`, error?.message ?? String(error));
     }
 
+    // Older hosts return void for Boss. The authoritative ledger already
+    // detects unchanged remaining counts; absent telemetry is not zero loot.
+    const inventoryOnly = !rewardReportAvailable && observedOwned != null;
     const result = await reportResult(
         baseUrl, action, executorId, observedOwned,
-        executionError == null && Object.keys(rewards).length > 0,
+        executionError == null && (Object.keys(rewards).length > 0 || inventoryOnly),
         executionError != null
             ? `FAILED:${executionError?.message ?? executionError}`
+            : !rewardReportAvailable ? (inventoryOnly ? "COMPLETED:INVENTORY_RECONCILED" : "REWARDS_UNAVAILABLE:NEEDS_RECONCILE")
             : Object.keys(rewards).length === 0 ? "NO_PROGRESS:NO_REWARDS" : "COMPLETED",
         rewards, token);
     log.info(`[计划驱动] 回写状态：{0}，{1}`, result.status, result.message);
 
     if (executionError) throw executionError;
-    if (Object.keys(rewards).length === 0) {
+    if (rewardReportAvailable && Object.keys(rewards).length === 0) {
         log.warn(`[计划驱动] 行动未产生奖励，重新领取以选择批量合成或安全停止`);
         return result.status === "STOPPED_NO_PROGRESS";
     }

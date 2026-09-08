@@ -968,7 +968,7 @@ class Boss extends Base {
         }
 
         await sleep(1000)
-        let failed = false;
+        let terminalExit = false;
         try {
             //自带复活重试配置，不需要再for
             return await dispatcher.RunAutoBossTask(param);
@@ -989,11 +989,11 @@ class Boss extends Base {
             //     }
             // }
         } catch (error) {
-            failed = true;
+            terminalExit = isTerminalTaskError(error);
             throw error;
         } finally {
-            if (!failed) await genshin.tpToStatueOfTheSeven();
-            Log.info("{0}", failed ? "首领任务未完成，不执行后续回神像" : "执行完成");
+            if (!terminalExit) await genshin.tpToStatueOfTheSeven();
+            Log.info("{0}", terminalExit ? "首领任务已终止，不执行后续回神像" : "首领任务收尾完成");
         }
     }
 }
