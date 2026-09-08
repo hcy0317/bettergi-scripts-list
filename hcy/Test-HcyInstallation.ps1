@@ -15,6 +15,20 @@ if (-not (Test-Path -LiteralPath $mappingPath -PathType Leaf)) {
 }
 
 $mapping = Get-Content -LiteralPath $mappingPath -Raw | ConvertFrom-Json
+$activeFolders = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+$groupRoot = Join-Path ([IO.Path]::GetFullPath($BetterGIRoot)) 'User\ScriptGroup'
+if (Test-Path -LiteralPath $groupRoot -PathType Container) {
+    foreach ($groupFile in Get-ChildItem -LiteralPath $groupRoot -File -Filter '*.json') {
+        $group = Get-Content -LiteralPath $groupFile.FullName -Raw | ConvertFrom-Json
+        foreach ($project in @($group.projects)) {
+            if ($project.type -eq 'Javascript' -and $project.status -ne 'Disabled' -and
+                -not [string]::IsNullOrWhiteSpace([string]$project.folderName)) {
+                $null = $activeFolders.Add([string]$project.folderName)
+            }
+        }
+    }
+}
+$checkedActiveFolders = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($entry in $mapping.packages) {
     $packageRoot = Join-Path $installRoot $entry.targetFolder
     $manifestPath = Join-Path $packageRoot 'manifest.json'
@@ -37,14 +51,26 @@ foreach ($entry in $mapping.packages) {
         }
     }
 
-    foreach ($marker in $entry.requiredMarkers) {
-        $markerPath = Join-Path $packageRoot $marker.file
-        if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
-            throw "HCY package marker file not found: $markerPath"
-        }
-        $source = Get-Content -LiteralPath $markerPath -Raw
-        if (-not $source.Contains([string]$marker.text, [StringComparison]::Ordinal)) {
-            throw "HCY package marker missing in $($entry.targetFolder)/$($marker.file): $($marker.text)"
+    $markerFolders = @([string]$entry.targetFolder)
+    if ($activeFolders.Contains([string]$entry.sourceFolder)) {
+        $markerFolders += [string]$entry.sourceFolder
+        $null = $checkedActiveFolders.Add([string]$entry.sourceFolder)
+    }
+    foreach ($folder in $markerFolders) {
+        foreach ($marker in $entry.requiredMarkers) {
+            $markerPath = Join-Path (Join-Path $installRoot $folder) $marker.file
+            if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+                throw "Installed script marker file not found: $markerPath"
+            }
+            $source = Get-Content -LiteralPath $markerPath -Raw
+            if (-not $source.Contains([string]$marker.text, [StringComparison]::Ordinal)) {
+                throw "Installed script marker missing in $folder/$($marker.file): $($marker.text)"
+            }
+            $expectedPath = Join-Path $forkRootPath "repo\js\$($entry.sourceFolder)\$($marker.file)"
+            $expectedSource = Get-Content -LiteralPath $expectedPath -Raw
+            if ($source.Replace("`r`n", "`n") -cne $expectedSource.Replace("`r`n", "`n")) {
+                throw "Installed script code differs from this release in $folder/$($marker.file)"
+            }
         }
     }
 }
@@ -52,5 +78,6 @@ foreach ($entry in $mapping.packages) {
 [PSCustomObject]@{
     status = 'passed'
     packageCount = @($mapping.packages).Count
+    activeSourcePackageCount = $checkedActiveFolders.Count
     installRoot = $installRoot
 }

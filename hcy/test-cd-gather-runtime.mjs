@@ -8,13 +8,14 @@ import { fileURLToPath } from "node:url";
 const sourceRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../repo/js/CD-Aware-AutoGather");
 
 async function createRuntime({
-    failPosition = false, failRoute = false, failRecovery = false, cancel = false,
+    failPosition = false, failRoute = false, failRecovery = false, cancel = false, terminal = false,
     filter = "", exposeCancellation = true, cancelAfterRoute = false, paths, selectedRoutes = [],
 } = {}) {
     const writes = new Map();
     const routes = [];
     const logs = [];
     let positionReads = 0;
+    let recoveries = 0;
     let cancelled = false;
     const routePaths = paths ?? ["矿物\\虹滴晶\\01.json", "矿物\\虹滴晶\\02.json", "地方特产\\蒙德\\落落莓\\01.json",
         "食材与炼金\\甜甜花\\01.json", "食材与炼金\\薄荷\\01.json", "食材与炼金\\兽肉\\01.json"];
@@ -48,7 +49,7 @@ async function createRuntime({
                 if (failPosition && positionReads === 1) throw new Error("不在主界面，无法识别小地图坐标");
                 return { x: positionReads * 100, y: 0 };
             },
-            returnMainUi: async () => { if (failRecovery) throw new Error("主界面恢复失败"); },
+            returnMainUi: async () => { recoveries++; if (failRecovery) throw new Error("主界面恢复失败"); },
         },
         pathingScript: {
             ReadPathSync: prefix => routePaths.filter(name => name.startsWith(prefix + "\\")),
@@ -57,6 +58,7 @@ async function createRuntime({
             readTextSync: () => routeJson,
             runFileFromUser: async name => {
                 routes.push(name);
+                if (terminal) throw new Error("[BGI_COMBAT_UNCONFIRMED] 战斗仍在进行");
                 if (cancel) { cancelled = true; throw new Error("用户取消"); }
                 if (failRoute && routes.length === 1) throw new Error("传送失败");
                 if (cancelAfterRoute) cancelled = true;
@@ -66,7 +68,7 @@ async function createRuntime({
     await vm.runInContext(fs.readFileSync(path.join(sourceRoot, "main.js"), "utf8"), context);
     vm.runInContext("worldInfo = { coOpMode: false }; currentParty = '采集';", context);
     return {
-        writes, routes, logs,
+        writes, routes, logs, get recoveries() { return recoveries; },
         runGather: () => vm.runInContext("runGatherMode()", context),
         scan: () => vm.runInContext("runScanMode()", context),
         async run() {
@@ -83,6 +85,14 @@ test("a route failure followed by failed UI recovery stops before the next route
     const runtime = await createRuntime({ failRoute: true, failRecovery: true });
     await assert.rejects(runtime.run(), /主界面恢复失败/);
     assert.equal(runtime.routes.length, 1);
+    assert.equal(runtime.writes.has("record/test.txt"), false);
+});
+
+test("unfinished combat stops gathering without recovery inputs or cooldown credit", async () => {
+    const runtime = await createRuntime({ terminal: true });
+    await assert.rejects(runtime.run(), /BGI_COMBAT_UNCONFIRMED/);
+    assert.equal(runtime.routes.length, 1);
+    assert.equal(runtime.recoveries, 0);
     assert.equal(runtime.writes.has("record/test.txt"), false);
 });
 

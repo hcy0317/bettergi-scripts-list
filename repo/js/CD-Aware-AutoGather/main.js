@@ -3,6 +3,9 @@ eval(file.readTextSync("lib/ocr.js"));
 eval(file.readTextSync("lib/inventory.js"));
 
 const settingFile = "settings.json";
+function isUnconfirmedCombat(error) {
+    return String(error?.message ?? error).includes("BGI_COMBAT_UNCONFIRMED");
+}
 const defaultTime = getDefaultTime();
 const countryList = ["蒙德", "璃月", "稻妻", "须弥", "枫丹", "纳塔", "挪德卡莱", "至冬"];
 const collectAbility = {
@@ -902,6 +905,7 @@ async function runPathScriptFile(jsonPath) {
     try {
         await sleep(10);
     } catch (error) {
+        if (isUnconfirmedCombat(error)) throw error;
         return error.toString();
     }
     return false;
@@ -993,6 +997,10 @@ async function runPathTaskIfCooldownExpired(material, taskInfo) {
                     pathEndPos = await genshin.getPositionFromMap(currentMap);
                 } catch (error) {
                     // 标准 sleep 会检查宿主取消令牌，不依赖仅部分本体提供的状态扩展。
+                    if (isUnconfirmedCombat(error)) {
+                        log.error("战斗未确认结束，停止采集；不执行恢复、下一路线或写入本路线冷却");
+                        throw error;
+                    }
                     try {
                         await sleep(1);
                     } catch {

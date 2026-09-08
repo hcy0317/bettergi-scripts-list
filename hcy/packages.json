@@ -33,6 +33,10 @@
         {
           "file": "src/utils/account-utils.js",
           "text": "migrateLegacyUnifiedConfig(uid)"
+        },
+        {
+          "file": "src/utils/error-utils.js",
+          "text": "operation was canceled"
         }
       ]
     },
