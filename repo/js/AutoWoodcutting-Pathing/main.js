@@ -297,49 +297,37 @@
     }
 
     // 调用BGI任务读取背包中的木材数量并返回
-    async function woodInventory(woodsArray, numbersArray, woodInventoryNumber) {
-        log.info("先别急，先别动键盘鼠标，要去一个神秘的地方");
-        await genshin.Tp(1581.11, -112.45, "Enkanomiya", true);
-        await moveMouseBy(0, -114514);
-        await moveMouseBy(0, -1919810);
-        await sleep(1000);
-        if (woodsArray.length === 0) {
-            var resultDict = await dispatcher.runTask(new SoloTask("CountInventoryItem", { "gridScreenName": "Materials", "itemNames": woodType }));
-        } else {
-            var resultDict = await dispatcher.runTask(new SoloTask("CountInventoryItem", { "gridScreenName": "Materials", "itemNames": woodsArray }));
-        }
-
-        const keys = [];
-        const values = [];
-
+    async function woodInventory(woodsArray, numbersArray, woodInventoryNumber, targetInventoryNumber) {
         try {
-            for (const [key, value] of Object.entries(resultDict)) {
-                // 尝试将值转换为数字
-                const numValue = Number(value);
+            // 使用新的 CountInventoryItemParam 参数类
+            const param = new CountInventoryItemParam();
+            param.GridScreenName = GridScreenName.Materials;      // 背包“材料”页签
+            const itemNames = woodsArray.length === 0 ? woodType : woodsArray;
+            for (const name of itemNames) {
+                param.ItemNames.Add(name);                        // 逐个添加物品名
+            }
+            param.IconRecognitionMode = ItemIconRecognitionMode.Item; // 按物品图标识别
 
-                // 检查是否为有效数字（NaN 表示不是数字）
-                if (isNaN(numValue)) {
-                    console.warn(`跳过无效值: key=${key}, value=${value}`);
-                    continue;
-                }
+            // 调用 BGI 任务接口
+            const resultDict = await dispatcher.runCountInventoryItemTask(param);
 
-                // 执行计算逻辑
-                const diff = Math.min(woodInventoryNumber, 9999) - numValue; // 限制不超过背包上限
-                const result = diff > 0 ? diff : 0;
+            // 处理返回结果，计算还需砍伐的数量
+            const keys = [];
+            const values = [];
+            for (const name of itemNames) {
 
-                keys.push(key);
+                // 背包中没有该木材时，BGI可能不会返回该key
+                // 此时直接按库存0计算
+                const numValue = Number(resultDict?.[name] ?? 0);
+                if (isNaN(numValue)) continue;
+                const result = Math.min(Math.max(woodInventoryNumber, 0), 2000, Math.max(Math.min(targetInventoryNumber, 9999) - numValue, 0));
+                keys.push(name);
                 values.push(result);
             }
-            // log.info("成功检测到的木材" + keys.join(","));
-            // log.info("成功检测到的木材砍伐数量" + values.join(","));
-            if (keys.length === 0) {
-                log.warn("未识别到任何木材，使用预设数据");
-                return [woodsArray, numbersArray];
-            } else {
-                return [keys, values];
-            }
+            return [keys, values];
+
         } catch (err) {
-            log.warn("处理故障，使用预设数据")
+            log.warn(`处理故障，使用预设数据，错误：${err}`);
             return [woodsArray, numbersArray];
         }
     }
@@ -440,8 +428,8 @@
         }
     }
 
-    const woodType = ["桦木", "萃华木", "松木", "却砂木", "竹节", "垂香木", "杉木", "梦见木", "枫木", "孔雀木", "御伽木", "辉木", "业果木", "证悟木", "刺葵木", "柽木", "悬铃木", "椴木", "白梣木", "香柏木", "炬木", "白栗栎木", "灰灰楼林木", "燃爆木", "桃椰子木", "银冷杉木", "榛木", "夏栎木", "桤木"];
-    const singleWoodType = ["桦木", "萃华木", "松木", "杉木", "竹节", "却砂木", "梦见木", "枫木", "孔雀木", "御伽木", "证悟木", "业果木", "辉木", "刺葵木", "柽木", "白梣木", "炬木", "白栗栎木", "燃爆木", "灰灰楼林木", "桃椰子木", "银冷杉木", "榛木", "夏栎木", "桤木"];
+    const woodType = ["桦木", "萃华木", "松木", "却砂木", "竹节", "垂香木", "杉木", "梦见木", "枫木", "孔雀木", "御伽木", "辉木", "业果木", "证悟木", "刺葵木", "柽木", "悬铃木", "椴木", "白梣木", "香柏木", "炬木", "白栗栎木", "灰灰楼林木", "燃爆木", "桃椰子木", "银冷杉木", "榛木", "夏栎木", "桤木", "雪杨木", "白桦木", "青榉木", "落叶松木"];
+    const singleWoodType = ["桦木", "萃华木", "松木", "杉木", "竹节", "却砂木", "梦见木", "枫木", "孔雀木", "御伽木", "证悟木", "业果木", "辉木", "刺葵木", "柽木", "白梣木", "炬木", "白栗栎木", "燃爆木", "灰灰楼林木", "桃椰子木", "银冷杉木", "榛木", "夏栎木", "桤木", "雪杨木", "白桦木", "青榉木", "落叶松木"];
 
     const woodNumberMap = new Map(woodType.map(key => [key, 0]));
     let woodNumberMapCopy = new Map();
@@ -482,11 +470,15 @@
         // '桃椰子木': { fileName: ['纳塔-浮土静界-桃椰子木-0个(大循环)', '纳塔-浮土静界-桃椰子木-36个(循环)'], folderName: '纳塔-桃椰子木' },
         '桃椰子木': { fileName: ['纳塔-浮土静界-桃椰子木-42个'], folderName: '纳塔-桃椰子木' },
         '银冷杉木': { fileName: ['挪德卡莱-霜月之坊-银冷杉木-54个'] },
-        // '榛木': { fileName: ['挪德卡莱-月矩力试验设计局-榛木-57个(稳定)'], folderName: '挪德卡莱-榛木' },
+        '榛木': { fileName: ['挪德卡莱-月矩力试验设计局-榛木-57个(稳定)'], folderName: '挪德卡莱-榛木' },
         // '榛木': { fileName: ['挪德卡莱-月矩力试验设计局-榛木-57个(月灵)'], folderName: '挪德卡莱-榛木' },
-        '榛木': { fileName: ['挪德卡莱-月矩力试验设计局-榛木-57个(月灵)', '挪德卡莱-月矩力试验设计局-榛木-57个(稳定)'], folderName: '挪德卡莱-榛木' },
+        // '榛木': { fileName: ['挪德卡莱-月矩力试验设计局-榛木-57个(月灵)', '挪德卡莱-月矩力试验设计局-榛木-57个(稳定)'], folderName: '挪德卡莱-榛木' },
         '夏栎木': { fileName: ['挪德卡莱-苔原之隙-夏栎木-0个(大循环)', '挪德卡莱-苔原之隙-夏栎木-36个(循环)'], folderName: '挪德卡莱-夏栎木' },
-        '桤木': { fileName: ['挪德卡莱-伦波岛-桤木-87个'] }
+        '桤木': { fileName: ['挪德卡莱-伦波岛-桤木-87个'] },
+        '雪杨木': { fileName: ['至冬-冰凝涷土-雪杨木-0个(大循环)', '至冬-冰凝涷土-雪杨木-48个(循环)'], folderName: '至冬-雪杨木' },
+        '白桦木': { fileName: ['至冬-海屑镇北部-白桦木-102个'] },
+        '青榉木': { fileName: ['至冬-焰羽谷-青榉木-39个'] },
+        '落叶松木': { fileName: ['至冬-冰凝涷土-落叶松木-36个'] },
     };
 
     const messages = [
@@ -504,12 +496,13 @@
     let woodsArray = settings.woodsMultiCheckbox ? Array.from(settings.woodsMultiCheckbox) : [];
     let numbersArray = settings.numbers ? settings.numbers.split(/\s+/).map(Number).map(num => isNaN(num) ? 0 : num) : [];
     let woodInventoryNumber = settings.woodInventoryNumber ? (isNaN(settings.woodInventoryNumber) ? 2000 : settings.woodInventoryNumber) : 2000;
+    let targetInventoryNumber = settings.targetInventoryNumber ? (isNaN(settings.targetInventoryNumber) ? 9999 : settings.targetInventoryNumber) : 9999;
     let hasItto = settings.hasItto ? settings.hasItto : false;
     let theBoonOfTheElderTreeStatus = settings.theBoonOfTheElderTree ? await theElderTree() : true;
     // 判断是否装备王树瑞佑，如果未装备则跳过伐木
     if (theBoonOfTheElderTreeStatus) {
         // 判断是否开启背包检测，如果未开启或识别失败，则使用设置填入的数据或默认数据
-        let [woodsInventory, woodCountInventory] = settings.woodInventory ? await woodInventory(woodsArray, numbersArray, woodInventoryNumber) : [woodsArray, numbersArray];
+        let [woodsInventory, woodCountInventory] = settings.woodInventory ? await woodInventory(woodsArray, numbersArray, woodInventoryNumber, targetInventoryNumber) : [woodsArray, numbersArray];
 
         // 将识别到的木材种类和所需数量转换为映射表，并计算需要砍伐的次数
         mapWoodsToNumbers(woodsInventory, woodCountInventory, hasItto);

@@ -1,6 +1,6 @@
 # HCY BetterGI 脚本维护线
 
-本分支以官方 `release` 为基线，只在 `hcy/main` 保留 HCY 独有兼容行为。官方包与 HCY 包使用不同安装目录，禁止再对 `User/JsScript` 中的官方包做字符串替换或启动前补丁。
+本维护线从官方源码 `main` 吸收更新，并保留 HCY 独有兼容行为。官方 `release` 是定期重建的生成分支，不直接合并其重写历史。官方包与 HCY 包使用不同安装目录，禁止再对 `User/JsScript` 中的官方包做字符串替换或启动前补丁。
 
 ## 仓库边界
 
@@ -13,9 +13,9 @@
 ## 更新上游
 
 ```powershell
-git fetch upstream release
+git fetch upstream main
 git switch hcy/main
-git merge upstream/release
+git merge upstream/main
 node .\hcy\test-packages.mjs
 node .\hcy\test-auto-commission-legacy-config.mjs
 node .\hcy\test-combat-strategies.mjs

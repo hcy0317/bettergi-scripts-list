@@ -1,12 +1,21 @@
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 
 // 处理命令行参数
 const args = process.argv.slice(2);
 const forceFullUpdate = args.includes('--force') || args.includes('-f');
 const enableGzip = args.includes('--gzip') || args.includes('-g');
+
+// 合并尚未提交时，新文件的历史在待合并父提交中；仅查询本次合并，不混入其他分支。
+const historyRefs = ['HEAD'];
+try {
+    const mergeHead = execFileSync('git', ['rev-parse', '--verify', 'MERGE_HEAD'], {
+        cwd: path.resolve(__dirname, '..'), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
+    }).trim();
+    if (/^[0-9a-f]{40,64}$/.test(mergeHead)) historyRefs.push(mergeHead);
+} catch { /* 普通构建没有 MERGE_HEAD。 */ }
 
 // 在文件开头添加全局变量
 const pathingDirsWithoutIcon = new Set();
@@ -68,17 +77,9 @@ function getGitTimestamp(filePath) {
         // 对路径进行特殊处理，处理路径中的特殊字符
         const relativePath = path.relative(path.resolve(__dirname, '..'), filePath).replace(/\\/g, '/');
         
-        let cmd;
-        if (process.platform === 'win32') {
-            // Windows平台使用双引号
-            cmd = `git log -1 --format="%ai" -- "${relativePath.replace(/"/g, '\\"')}"`;
-        } else {
-            // Linux/Mac平台使用单引号
-            const quotedPath = relativePath.replace(/'/g, "'\\''"); // 处理单引号
-            cmd = `git log -1 --format="%ai" -- '${quotedPath}'`;
-        }
-        
-        const time = execSync(cmd).toString().trim();
+        const time = execFileSync('git', ['log', '-1', '--format=%ai', ...historyRefs, '--', relativePath], {
+            cwd: path.resolve(__dirname, '..'), encoding: 'utf8'
+        }).trim();
         if (!time) {
             console.warn(`未找到文件 ${filePath} 的提交记录`);
             return null;
@@ -376,15 +377,9 @@ function extractInfoFromJSFolder(folderPath) {
 function extractInfoFromPathingFile(filePath, parentFolders) {
     let content = fs.readFileSync(filePath, 'utf8');
     
-    // 检测并移除BOM
+    // 仅在内存中移除BOM用于解析；生成索引不得顺带改写路线源码。
     if (content.charCodeAt(0) === 0xFEFF) {
         content = content.replace(/^\uFEFF/, '');
-        try {
-            fs.writeFileSync(filePath, content, 'utf8');
-            console.log(`已移除文件BOM标记: ${filePath}`);
-        } catch (error) {
-            console.error(`移除BOM标记时出错 ${filePath}:`, error);
-        }
     }
     
     const contentObj = JSON.parse(content);
