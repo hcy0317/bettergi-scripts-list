@@ -3,6 +3,9 @@ import {filterUsablePathNodes, selectUidValue, upsertUidValue} from "./utils/sta
 import {getEffectiveSelectedOptions, refreshSelectedRouteCache, selectRouteNodes} from "./utils/route-selection";
 
 let manifest_json = "manifest.json";
+function isUnconfirmedCombat(error) {
+    return String(error?.message ?? error).includes("BGI_COMBAT_UNCONFIRMED");
+}
 let manifest = undefined
 let configSettings = undefined
 const auto = {
@@ -2043,7 +2046,8 @@ async function runList(list = [], key = "", current_name = "", parent_name = "",
             // 执行单个路径，并传入停止标识
             await runPath(path, onePath.rootName, parent_name, current_name);
         } catch (error) {
-            if (pathingScript.isCancellationRequested) {
+            if (isUnconfirmedCombat(error) || pathingScript.isCancellationRequested) {
+                log.error("当前路线未确认结束或已取消，停止路径列表，不登记本路线成功或继续下一路线");
                 throw error;
             }
             log.error('执行路径列表中的路径失败: {path}, 错误: {error}', path, error.message);

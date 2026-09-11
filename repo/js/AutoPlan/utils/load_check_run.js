@@ -1,4 +1,9 @@
 import {config, LoadType} from "../config/config";
+function isTerminalTaskError(error) {
+    return /BGI_COMBAT_UNCONFIRMED|OperationCanceledException|TaskCanceledException|NormalEndException|UserCancelled|取消|cancelled|canceled/i
+        .test(String(error?.message ?? error) + " " + String(error?.name ?? ""));
+}
+
 import {Physical} from "./physical";
 import {getDayOfWeek, Log, outDomainUI, outStygianOnslaughtUI, parseInteger, throwError, toMainUi} from "./tool";
 import {findStygianOnslaught} from "./activity";
@@ -384,6 +389,7 @@ class Domain extends Base {
             throwError(e.message)
         }
         Log.debug(`副本轮数:${domainParam.DomainRoundNum}`)
+        let terminalExit = false;
         try {
             // 复活重试
             for (let i = 0; i < config.run.retry_count; i++) {
@@ -392,6 +398,7 @@ class Domain extends Base {
                     // 其他场景不重试
                     break;
                 } catch (e) {
+                    if (isTerminalTaskError(e)) throw e;
                     const errorMessage = e.message
                     // 只有选择了秘境的时候才会重试
                     if (errorMessage.includes("复活") && domainParam.DomainName) {
@@ -402,10 +409,13 @@ class Domain extends Base {
                     }
                 }
             }
+        } catch (error) {
+            terminalExit = isTerminalTaskError(error);
+            throw error;
         } finally {
             Log.info(`{0}`, "执行完成")
             // 退出秘境
-            await outDomainUI()
+            if (!terminalExit) await outDomainUI()
         }
     }
 }
@@ -546,6 +556,7 @@ class LeyLineOutcrop extends Base {
                 // 其他场景不重试
                 break;
             } catch (e) {
+                if (isTerminalTaskError(e)) throw e;
                 const errorMessage = e.message
                 // 只有选择了秘境的时候才会重试
                 if (errorMessage.includes("复活")) {
@@ -747,6 +758,7 @@ class StygianOnslaught extends Base {
         }
 
         await sleep(1000)
+        let terminalExit = false;
         try {
             // 复活重试
             for (let i = 0; i < config.run.retry_count; i++) {
@@ -755,6 +767,7 @@ class StygianOnslaught extends Base {
                     // 其他场景不重试
                     break;
                 } catch (e) {
+                    if (isTerminalTaskError(e)) throw e;
                     const errorMessage = e.message
                     if (errorMessage.includes("复活")) {
                         continue;
@@ -764,10 +777,13 @@ class StygianOnslaught extends Base {
                     }
                 }
             }
+        } catch (error) {
+            terminalExit = isTerminalTaskError(error);
+            throw error;
         } finally {
             Log.info(`{0}`, "执行完成")
             // 退出危战
-            await outStygianOnslaughtUI()
+            if (!terminalExit) await outStygianOnslaughtUI()
         }
     }
 
@@ -952,9 +968,10 @@ class Boss extends Base {
         }
 
         await sleep(1000)
+        let failed = false;
         try {
             //自带复活重试配置，不需要再for
-            await dispatcher.RunAutoBossTask(param)
+            return await dispatcher.RunAutoBossTask(param);
             // // 复活重试
             // for (let i = 0; i < config.run.retry_count; i++) {
             //     try {
@@ -971,9 +988,12 @@ class Boss extends Base {
             //         }
             //     }
             // }
+        } catch (error) {
+            failed = true;
+            throw error;
         } finally {
-            await genshin.tpToStatueOfTheSeven();
-            Log.info(`{0}`, "执行完成")
+            if (!failed) await genshin.tpToStatueOfTheSeven();
+            Log.info("{0}", failed ? "首领任务未完成，不执行后续回神像" : "执行完成");
         }
     }
 }
