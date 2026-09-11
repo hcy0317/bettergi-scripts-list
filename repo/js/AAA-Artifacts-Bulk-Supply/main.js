@@ -1277,6 +1277,9 @@ async function runPath(fullPath, targetItemPath = null) {
             const runResult = await pathingScript.runFile(fullPath);
             await fakeLog(fullPath, false, false, 0);
             return runResult;
+        } catch (error) {
+            log.error(`执行路线 ${fullPath} 时发生错误：${error.message}`);
+            throw error;
         } finally {
             state.running = false;
         }
@@ -1308,7 +1311,7 @@ async function runPath(fullPath, targetItemPath = null) {
     })();
 
     /* ---------- 并发等待 ---------- */
-    const [pathingResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+      const [pathingResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
     if (pathingResult.status === "rejected") {
         throw pathingResult.reason;
     }

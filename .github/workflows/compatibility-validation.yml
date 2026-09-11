@@ -1,0 +1,47 @@
+name: HCY Compatibility Validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: ['codex/upstream-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Runtime compatibility regressions
+        run: >-
+          node --experimental-vm-modules --test
+          hcy/test-artifact-route-confirmation.mjs
+          hcy/test-auto-commission-errors.mjs
+          hcy/test-cd-gather-runtime.mjs
+          hcy/test-cultivation-runtime.mjs
+          hcy/test-index-build.mjs
+          hcy/test-monster-route-cache.mjs
+          hcy/test-purchase-account.mjs
+      - name: Installed host and package contracts
+        run: |
+          node --experimental-vm-modules hcy/test-commission-live-compat.mjs
+          node --experimental-vm-modules hcy/test-commission-music-flow.mjs
+          node hcy/test-packages.mjs
+      - name: Changed source integrity without executing game modules
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: node --experimental-vm-modules hcy/test-upstream-integrity.mjs "$BASE_SHA"
+      - name: Verify checks did not modify source
+        run: |
+          git diff --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
