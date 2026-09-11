@@ -143,4 +143,3 @@ export async function executeMainProcess(stepRegistry, commissionScopes) {
         throw error;
     }
 }
-

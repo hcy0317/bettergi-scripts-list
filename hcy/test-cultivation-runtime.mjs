@@ -214,7 +214,6 @@ test("a legacy void boss result relies on the inventory ledger instead of declar
     assert.equal(result.terminationReason, "COMPLETED:INVENTORY_RECONCILED");
     assert.equal(runtime.claims.length, 2);
 });
-
 test("terminal inventory scan errors propagate without another scan or a success report", async () => {
     const runtime = await createRuntime({ scan: () => { throw new Error("[BGI_COMBAT_UNCONFIRMED] stop"); } });
     await assert.rejects(runtime.reconcile(), /BGI_COMBAT_UNCONFIRMED/);

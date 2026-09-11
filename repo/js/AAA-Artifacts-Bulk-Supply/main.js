@@ -1074,53 +1074,44 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
             log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
             continue;
         }
-        if (pathRes !== undefined && typeof pathRes.success === 'boolean') {
-            // 新版本BGI：直接使用返回值判定路线是否成功
-            if (pathRes.success) {
-                log.info("路线运行成功");
-            } else {
+        if (pathRes != null && typeof pathRes.success === 'boolean') {
+            if (!pathRes.success) {
                 log.error(`路线运行失败：${pathRes.message}`);
                 failcount++;
                 skiprecord = true;
                 await sleep(5000);
+            } else {
+                log.info("路线运行成功");
             }
-        } else if (pathInfo.ok) {
-            // 旧版本BGI：静默回退到坐标校验
+        } else if (pathInfo.ok && Number.isFinite(pathInfo.x) && Number.isFinite(pathInfo.y)) {
             await genshin.returnMainUi();
             await sleep(500);
-
+            let confirmed = false;
             const maxAttempts = 3;
-            let attempts = 0;
-
-            while (attempts < maxAttempts) {
-                try {
-                    const cur = await genshin.getPositionFromMap(pathInfo.map_name);
-                    const dist = Math.hypot(cur.x - pathInfo.x, cur.y - pathInfo.y);
-
-                    if (dist < 50) break;   // 成功跳出
-
-                    attempts++;
-                    log.warn(
-                        `路线 ${Path.fileName} 第 ${attempts} 次检测失败 ` +
-                        `(距离 ${dist.toFixed(2)}) —— ` +
-                        `当前(${cur.x.toFixed(2)}, ${cur.y.toFixed(2)}) ` +
-                        `目标(${pathInfo.x.toFixed(2)}, ${pathInfo.y.toFixed(2)})`
-                    );
-
-                    if (attempts === maxAttempts) {
-                        failcount++;
-                        skiprecord = true;
-                        await sleep(5000);
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                // 缺失坐标是未知观测；宿主抛出的取消/终止异常不能被当作坐标缺失吞掉。
+                const cur = await genshin.getPositionFromMap(pathInfo.map_name);
+                if (cur != null && Number.isFinite(cur.x) && Number.isFinite(cur.y)) {
+                    const distance = Math.hypot(cur.x - pathInfo.x, cur.y - pathInfo.y);
+                    if (distance < 50) {
+                        confirmed = true;
                         break;
                     }
-
-                    await sleep(1000);
-                } catch (err) {
-                    log.error(`发生错误：${err.message}`);
-                    skiprecord = true;
-                    break;
+                    log.warn(`路线 ${Path.fileName} 第 ${attempt}/${maxAttempts} 次未确认到达，距离 ${distance.toFixed(2)}`);
+                } else {
+                    log.warn(`路线 ${Path.fileName} 第 ${attempt}/${maxAttempts} 次坐标不可用，等待新观测`);
                 }
+                if (attempt < maxAttempts) await sleep(1000);
             }
+            if (!confirmed) {
+                failcount++;
+                skiprecord = true;
+                log.error(`路线 ${Path.fileName} 未确认到达，不登记冷却`);
+            }
+        } else {
+            failcount++;
+            skiprecord = true;
+            log.error(`路线 ${Path.fileName} 缺少有效终点和宿主成功结果，不登记冷却`);
         }
 
         if (!skiprecord) {
