@@ -66,6 +66,11 @@ foreach ($entry in $mapping.packages) {
             if (-not $source.Contains([string]$marker.text, [StringComparison]::Ordinal)) {
                 throw "Installed script marker missing in $folder/$($marker.file): $($marker.text)"
             }
+            $expectedPath = Join-Path $forkRootPath "repo\js\$($entry.sourceFolder)\$($marker.file)"
+            $expectedSource = Get-Content -LiteralPath $expectedPath -Raw
+            if ($source.Replace("`r`n", "`n") -cne $expectedSource.Replace("`r`n", "`n")) {
+                throw "Installed script code differs from this release in $folder/$($marker.file)"
+            }
         }
     }
 }
