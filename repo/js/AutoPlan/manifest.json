@@ -4,7 +4,7 @@
   "description": "",
   "settings_ui": "settings.json",
   "main": "main.js",
-  "bgi_version": "0.64.2",
+  "bgi_version": "0.64.2-alpha.2",
   "key": "2Cbayi1S2I41BlTXb/XAmw==",
   "last_key": "yHlw8FHjTJAPEtpp9O+",
   "authors": [
