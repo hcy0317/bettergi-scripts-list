@@ -41,7 +41,7 @@ let moraDiff = 0;
 let state = {};
 let record = {};
 let CDInfo = [];
-let failcount = 0;
+const failedRoutes = new Set();
 let autoSalvageCount = 0;
 let furinaState = "unknown";
 let commands = []; // 命令数组（全局变量）
@@ -64,6 +64,7 @@ let rollingDelay = 25;
 let gameRegion;
 let lastsettimeTime = 0;
 
+// 普通脚本入口返回的 Promise 由宿主等待，保留原脚本执行模式。
 (async function () {
     setGameMetrics(1920, 1080, 1);
     dispatcher.AddTrigger(new RealtimeTimer("AutoSkip"));
@@ -185,6 +186,7 @@ let lastsettimeTime = 0;
     await writeRecord(accountName);
 
     // 只有当配置了autoOnline时才生成命令文件
+    assertCompletedRoutes();
     if (settings.autoOnline && settings.autoOnline.trim()) {
         await generateCommandFile();
     } else {
@@ -192,6 +194,12 @@ let lastsettimeTime = 0;
     }
 
 })();
+
+function assertCompletedRoutes() {
+    if (failedRoutes.size === 0) return;
+    const names = [...failedRoutes].slice(0, 8).map(path => path.split(/[\\/]/).pop());
+    throw new Error(`${failedRoutes.size}条狗粮路线未完成；成功路线已保留，失败路线未登记冷却：${names.join(", ")}`);
+}
 
 // 生成命令文件
 async function generateCommandFile() {
@@ -1061,15 +1069,17 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 state.cancel = true;
                 throw error;
             }
+            failedRoutes.add(Path.fullPath);
             success = false;
             if (state.cancel) {
-                return;
+                throw error;
             }
             try {
                 await genshin.returnMainUi();
                 await sleep(500);
             } catch (recoveryError) {
-                log.warn(`路线失败后返回主界面失败，继续下一条路线：${recoveryError.message}`);
+                log.error(`路线失败后返回主界面失败，停止剩余路线：${recoveryError.message}`);
+                throw recoveryError;
             }
             log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
             continue;
@@ -1077,7 +1087,7 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
         if (pathRes != null && typeof pathRes.success === 'boolean') {
             if (!pathRes.success) {
                 log.error(`路线运行失败：${pathRes.message}`);
-                failcount++;
+                failedRoutes.add(Path.fullPath);
                 skiprecord = true;
                 await sleep(5000);
             } else {
@@ -1104,17 +1114,18 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 if (attempt < maxAttempts) await sleep(1000);
             }
             if (!confirmed) {
-                failcount++;
+                failedRoutes.add(Path.fullPath);
                 skiprecord = true;
                 log.error(`路线 ${Path.fileName} 未确认到达，不登记冷却`);
             }
         } else {
-            failcount++;
+            failedRoutes.add(Path.fullPath);
             skiprecord = true;
             log.error(`路线 ${Path.fileName} 缺少有效终点和宿主成功结果，不登记冷却`);
         }
 
         if (!skiprecord) {
+            failedRoutes.delete(Path.fullPath);
             CDInfo = [...new Set([...CDInfo, Path.fullPath])];
             await writeCDInfo(accountName);
         }
@@ -1311,9 +1322,9 @@ async function runPath(fullPath, targetItemPath = null) {
     })();
 
     /* ---------- 并发等待 ---------- */
-      const [pathingResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
-    if (pathingResult.status === "rejected") {
-        throw pathingResult.reason;
+    const [pathingResult, pickupResult, recoveryResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+    for (const result of [pathingResult, pickupResult, recoveryResult]) {
+        if (result.status === "rejected") throw result.reason;
     }
     return pathingResult.value;
 }
