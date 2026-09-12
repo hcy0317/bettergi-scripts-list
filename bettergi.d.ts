@@ -168,22 +168,27 @@ declare const keyMouseScript: {
 /**
  * 自动路径追踪脚本
  */
+interface PathingRunResult {
+  /** 原生执行器已确认完成；失败或取消会拒绝 Promise，不会返回此结果。 */
+  readonly success: true;
+}
+
 declare const pathingScript: {
   /**
    * 执行路径追踪 JSON
    * @param json 路径追踪 JSON 字符串
    */
-  run(json: string): Promise<void>;
+  run(json: string): Promise<PathingRunResult>;
   /**
    * 执行路径追踪文件
    * @param path 文件路径（相对于脚本根目录）
    */
-  runFile(path: string): Promise<void>;
+  runFile(path: string): Promise<PathingRunResult>;
   /**
    * 从已订阅的内容中运行文件
    * @param path 在 User\AutoPathing 目录下的文件路径
    */
-  runFileFromUser(path: string): Promise<void>;
+  runFileFromUser(path: string): Promise<PathingRunResult>;
   // ==== BEGIN AUTO-GENERATED ALIASES ====
   Run: typeof pathingScript.run;
   RunFile: typeof pathingScript.runFile;

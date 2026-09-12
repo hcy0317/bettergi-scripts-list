@@ -92,7 +92,7 @@
       "requiredMarkers": [
         {
           "file": "main.js",
-          "text": "const [pathingResult] = await Promise.allSettled"
+          "text": "const [pathingResult, pickupResult, recoveryResult] = await Promise.allSettled"
         }
       ]
     }

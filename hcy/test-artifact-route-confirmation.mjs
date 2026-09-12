@@ -11,14 +11,14 @@ for (const name of ['AAA-Artifacts-Bulk-Supply']) {
   const block = source.slice(start, end);
   async function run(points, target = {ok:true, x:100, y:100, map_name:'Teyvat'}, pathRes = undefined) {
     let calls = 0;
-    const context = vm.createContext({pathInfo:target, pathRes, Path:{fileName:'fixture'},
-      skiprecord:false, failcount:0, sleep:async()=>{}, log:{info(){},warn(){},error(){}},
+    const context = vm.createContext({pathInfo:target, pathRes, Path:{fileName:'fixture',fullPath:'fixture.json'},
+      skiprecord:false, failedRoutes:new Set(), sleep:async()=>{}, log:{info(){},warn(){},error(){}},
       genshin:{returnMainUi:async()=>{},getPositionFromMap:async()=>{
         const item=points[Math.min(calls++,points.length-1)];
         if(item instanceof Error) throw item;
         return item;
       }}});
-    const result = await vm.runInContext(`(async()=>{${block};return {skiprecord,failcount};})()`, context);
+    const result = await vm.runInContext(`(async()=>{${block};return {skiprecord,failcount:failedRoutes.size};})()`, context);
     return {...result,calls};
   }
   test(`${name}: missing frame then valid frame confirms`, async()=>
