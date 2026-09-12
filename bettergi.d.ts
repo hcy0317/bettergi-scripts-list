@@ -352,6 +352,8 @@ declare const genshin: {
    * 返回主界面
    */
   returnMainUi(): Promise<void>;
+  /** 退出秘境并等待连续新帧确认秘境外主界面；失败或取消时拒绝。 */
+  exitDomain(): Promise<void>;
   /**
    * 自动钓鱼
    * @param fishingTimePolicy 钓鱼时间策略（默认 0）
@@ -407,6 +409,7 @@ declare const genshin: {
   GoToAdventurersGuild: typeof genshin.goToAdventurersGuild;
   GoToCraftingBench: typeof genshin.goToCraftingBench;
   ReturnMainUi: typeof genshin.returnMainUi;
+  ExitDomain: typeof genshin.exitDomain;
   AutoFishing: typeof genshin.autoFishing;
   Relogin: typeof genshin.relogin;
   WonderlandCycle: typeof genshin.wonderlandCycle;
