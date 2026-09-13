@@ -496,13 +496,22 @@ async function runPlanCore(config) {
     if (!startRefreshCompleted) {
         log.warn("[计划驱动] 计划开始前库存存在未知项，继续使用上次可信库存；计划器可再请求一次有界复核");
     }
-    let resinSnapshot = await scanResinSnapshot();
+    let resinSnapshot = null;
+    async function claimNextAction() {
+        const claimUrl = `${baseUrl}/execution/next-action?uid=${encodeURIComponent(uid)}`
+            + `&executorId=${encodeURIComponent(executorId)}`;
+        let action = await requestJson("POST", claimUrl + "&prepareOnly=true"
+            + resinSnapshotQuery(resinSnapshot), {}, config.bgi_tools.token);
+        if (action.status === "NEEDS_RESIN_SNAPSHOT" || action.status === "READY_FOR_ACTION") {
+            if (action.status === "NEEDS_RESIN_SNAPSHOT") resinSnapshot = await scanResinSnapshot();
+            action = await requestJson("POST", claimUrl + resinSnapshotQuery(resinSnapshot), {}, config.bgi_tools.token);
+        }
+        // 旧服务可能忽略prepareOnly并已领取ACTION，必须承接这一份行动，不能重复claim。
+        return action;
+    }
     async function drive() {
         while (true) {
-            const claimUrl = `${baseUrl}/execution/next-action?uid=${encodeURIComponent(uid)}`
-                + `&executorId=${encodeURIComponent(executorId)}`
-                + resinSnapshotQuery(resinSnapshot);
-            const action = await requestJson("POST", claimUrl, {}, config.bgi_tools.token);
+            const action = await claimNextAction();
             if (action.status === "NEEDS_RECONCILE") {
                 log.warn(`[计划驱动] 上一行动仅执行背包复核，不再消耗树脂：{0}`, action.materialName);
                 let observedOwned = null;
@@ -523,8 +532,7 @@ async function runPlanCore(config) {
                 const reconcile = await runInventoryReconcileOnce(
                     config, inventoryReconcileState, `计划请求复核：${action.message}`);
                 if (reconcile.succeeded && reconcile.performed) {
-                    const afterReconcile = await requestJson(
-                        "POST", claimUrl, {}, config.bgi_tools.token);
+                    const afterReconcile = await claimNextAction();
                     if (afterReconcile.status === "ACTION" || afterReconcile.status === "NEEDS_RECONCILE") {
                         action.status = afterReconcile.status;
                         Object.assign(action, afterReconcile);
@@ -564,7 +572,7 @@ async function runPlanCore(config) {
         const executionResult = await executeAction(
                 baseUrl, action, executorId, config.bgi_tools.token);
             if (action.actionType === "DOMAIN" || action.actionType === "WORLD_BOSS") {
-                resinSnapshot = await scanResinSnapshot();
+                resinSnapshot = null;
             }
             if (!executionResult.shouldContinue) return outcome(executionResult.status, executionResult.message);
         }
