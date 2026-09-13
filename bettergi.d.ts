@@ -9,6 +9,13 @@
 
 // ==================== 全局方法 ====================
 
+/** 当前脚本专属终态。受管脚本应先requireExplicitOutcome，再在结束时report一次。 */
+declare const taskResult: {
+    requireExplicitOutcome(): void;
+    check(): void;
+    report(kind: "Completed" | "Skipped" | "Deferred" | "NeedsReconcile" | "Failed" | "Cancelled", reason: string): void;
+};
+
 /**
  * 延迟执行（异步）
  * @param millisecondsTimeout 延迟时间（毫秒）

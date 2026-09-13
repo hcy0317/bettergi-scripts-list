@@ -12,8 +12,8 @@ const config = () => ({
 });
 
 async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
-    nextActions = [], craft, returnMain, bench, resinVisible = false, boss } = {}) {
-    const logs = [], scans = [], submissions = [], events = [], claims = [];
+    nextActions = [], craft, returnMain, bench, resinVisible = false, boss, outcomeApi = true } = {}) {
+    const logs = [], scans = [], submissions = [], events = [], claims = [], outcomes = [];
     const actions = [...nextActions];
     let now = 0, crafts = 0;
     class ClockDate extends Date {
@@ -30,6 +30,7 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
     const ocr = () => ({ kind: "ocr" });
     const context = vm.createContext({
         console, settings: {}, Date: ClockDate,
+        taskResult: outcomeApi ? { requireExplicitOutcome() {}, check() {}, report(kind, reason) { outcomes.push({kind, reason}); } } : undefined,
         sleep: async ms => { now += ms; },
         keyPress: async key => { events.push("key:" + key); }, click() {},
         Pen: class {}, Color: { Red: "red", RoyalBlue: "blue" },
@@ -93,11 +94,49 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
     await entry.link((specifier, parent) => load(path.resolve(
         parent.identifier === entryPath ? path.join(root, "utils") : path.dirname(parent.identifier), specifier + ".js")));
     await entry.evaluate();
-    return { logs, scans, submissions, events, claims,
+    return { logs, scans, submissions, events, claims, outcomes,
         reconcile: () => entry.namespace.runCultivationInventoryReconcile(config()),
         run: () => entry.namespace.runPlanDrivenCultivation(config()),
         physical: modules.get(path.join(root, "utils/physical.js")).namespace.Physical };
 }
+
+test("managed BUSY cannot be reported as a completed script", async () => {
+    const runtime = await createRuntime({nextActions: [{status: "BUSY", message: "lease held"}]});
+    await runtime.run();
+    assert.equal(runtime.outcomes.length, 1);
+    assert.equal(runtime.outcomes[0].kind, "Deferred");
+});
+
+for (const [status, kind] of [["COMPLETED", "Completed"], ["NO_PLAN", "Skipped"],
+    ["NO_TARGETS", "Skipped"], ["WAITING", "Deferred"], ["UNKNOWN_STATUS", "NeedsReconcile"]]) {
+    test(`managed terminal ${status} preserves ${kind}`, async () => {
+        const runtime = await createRuntime({nextActions: [{status}]});
+        await runtime.run();
+        assert.equal(runtime.outcomes.length, 1);
+        assert.equal(runtime.outcomes[0].kind, kind);
+    });
+}
+
+test("COMPLETED with an unresolved final inventory is not completion", async () => {
+    const runtime = await createRuntime({nextActions: [{status: "COMPLETED"}], observationStatus: "NEEDS_RECONCILE"});
+    await runtime.run();
+    assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+    assert.match(runtime.outcomes[0].reason, /FINAL_INVENTORY_UNRESOLVED/);
+});
+
+test("an old host without the result protocol stops before game or HTTP work", async () => {
+    const runtime = await createRuntime({outcomeApi: false});
+    await assert.rejects(runtime.run(), /BGI_TASK_OUTCOME_UNSUPPORTED/);
+    assert.deepEqual(runtime.events, []);
+    assert.deepEqual(runtime.claims, []);
+    assert.deepEqual(runtime.scans, []);
+});
+
+test("NO_TARGETS reconciliation is a skip, although its legacy boolean is true", async () => {
+    const runtime = await createRuntime({targets: {status: "NO_TARGETS"}});
+    assert.equal(await runtime.reconcile(), true);
+    assert.equal(runtime.outcomes[0].kind, "Skipped");
+});
 
 test("Materials requests use ItemV2 directly and report the final frost flower count", async () => {
     const runtime = await createRuntime();
@@ -150,9 +189,9 @@ test("failure to exit the crafting page stops instead of scanning inventory on t
 });
 
 test("terminal combat or cancellation during a batch does not send recovery or later game inputs", async () => {
-    for (const message of ["[BGI_COMBAT_UNCONFIRMED] 未结束", "用户取消"]) {
+    for (const message of ["[BGI_COMBAT_UNCONFIRMED] 未结束", "[BGI_TASK_CANCELLED] 用户取消"]) {
         const runtime = await createRuntime({ nextActions: [batch], craft: () => { throw new Error(message); } });
-        await assert.rejects(runtime.run(), new RegExp(message.includes("BGI") ? "BGI_COMBAT_UNCONFIRMED" : "用户取消"));
+        await assert.rejects(runtime.run(), new RegExp(message.includes("COMBAT") ? "BGI_COMBAT_UNCONFIRMED" : "BGI_TASK_CANCELLED"));
         assert.deepEqual(runtime.events.slice(runtime.events.indexOf("craft:缺料项")), ["craft:缺料项"]);
         assert.equal(runtime.scans.length, 1);
     }

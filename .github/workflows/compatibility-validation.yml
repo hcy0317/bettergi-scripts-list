@@ -28,6 +28,7 @@ jobs:
           hcy/test-artifact-completion.mjs
           hcy/test-artifact-route-confirmation.mjs
           hcy/test-auto-commission-errors.mjs
+          hcy/test-autoplan-bridge-export.mjs
           hcy/test-autoplan-domain-exit.mjs
           hcy/test-autoplan-managed-compat.mjs
           hcy/test-cd-gather-runtime.mjs
