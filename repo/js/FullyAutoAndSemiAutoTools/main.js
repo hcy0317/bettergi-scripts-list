@@ -1315,6 +1315,7 @@ async function init() {
 
 async function main() {
     let lastRunMap = new Map()
+    const runFailures = new Set();
 
     function chooseBestRun() {
         if (settings.choose_best && RecordLast.paths.size > 0) {
@@ -1368,11 +1369,15 @@ async function main() {
         if (settings.choose_best) {
             log.info(`[{0}] [{1}]`, settings.mode, "择优模式-启动")
         }
-        await runMap(needRunMap)
+        await runMap(needRunMap, runFailures)
     }
     if (lastRunMap.size > 0) {
         log.info(`[{0}] [{1}]`, settings.mode, "择优模式-收尾")
-        await runMap(lastRunMap)
+        await runMap(lastRunMap, runFailures)
+    }
+    if (runFailures.size > 0) {
+        throw new Error(`${runFailures.size}条路线执行失败，其余路线已继续尝试；失败路线未记录成功：`
+            + [...runFailures].slice(0, 8).join("；"));
     }
 
     // if (needRunMap.size <= 0 && lastRunMap.size <= 0) {
@@ -2012,7 +2017,7 @@ async function runPath(path, root_name = "", parent_name = "", current_name = ""
  * @param {Array} list - 要执行的路径列表，默认为空数组
  * @returns {Promise<void>}
  */
-async function runList(list = [], key = "", current_name = "", parent_name = "", group_key = "", group_value = "") {
+async function runList(list = [], key = "", current_name = "", parent_name = "", group_key = "", group_value = "", runFailures = new Set()) {
     // 参数验证
     if (!Array.isArray(list)) {
         log.warn('无效的路径列表参数: {list}', list);
@@ -2052,6 +2057,7 @@ async function runList(list = [], key = "", current_name = "", parent_name = "",
             }
             log.error('执行路径列表中的路径失败: {path}, 错误: {error}', path, error.message);
             Record.errorPaths.add(path)
+            runFailures.add(path);
             await saveRecord();
             log.warn('已记录失败路径并跳过，继续执行下一个路径: {path}', path);
             continue;
@@ -2071,7 +2077,7 @@ async function runList(list = [], key = "", current_name = "", parent_name = "",
  * @param {Map} map - 包含任务信息的Map对象，默认为新的Map实例
  * @returns {Promise<void>} - 异步执行，没有返回值
  */
-async function runMap(map = new Map()) {
+async function runMap(map = new Map(), runFailures = new Set()) {
     // 参数验证
     if (!(map instanceof Map)) {
         log.warn('无效的Map参数: {map}', map);
@@ -2108,7 +2114,7 @@ async function runMap(map = new Map()) {
             log.debug(`[{0}] {1}组 开始执行...`, settings.mode, key);
             // 执行当前任务关联的路径列表
 
-            await runList(one.paths, key, one.current_name, one.parent_name, group_prefix, (index + "/" + map.size));
+            await runList(one.paths, key, one.current_name, one.parent_name, group_prefix, (index + "/" + map.size), runFailures);
 
             log.debug(`[{0}] 任务[{1}]执行完成`, settings.mode, key);
         } catch (error) {
