@@ -1,7 +1,9 @@
 {
   "manifest_version": 1,
   "name": "全自动周一",
-  "version": "1.4.5",
+  "version": "1.4.7",
+  "outcome_contract": "explicit-v1",
+  "bgi_version": "0.64.2-alpha.4-runtimefix.20260915.1",
   "tags": [
     "周常",
     "纪行",
@@ -23,7 +25,8 @@
     }
   ],
   "saved_files": [
-    "record/*.txt"
+    "record/*.txt",
+    "record/*_progress.v1.json"
   ],
   "settings_ui": "settings.json",
   "main": "main.js"

@@ -105,6 +105,18 @@ test("managed BUSY cannot be reported as a completed script", async () => {
     await runtime.run();
     assert.equal(runtime.outcomes.length, 1);
     assert.equal(runtime.outcomes[0].kind, "Deferred");
+    assert(!runtime.events.includes("key:M"), "BUSY must not start a resin map scan");
+    assert(runtime.claims[0].includes("prepareOnly=true"));
+});
+
+test("old action reconciliation does not require a resin snapshot first", async () => {
+    const runtime = await createRuntime({nextActions: [
+        {status: "NEEDS_RECONCILE", actionId: "old", revision: 1, materialName: "霜仙花"},
+        {status: "COMPLETED"},
+    ]});
+    await runtime.run();
+    assert(!runtime.events.includes("key:M"));
+    assert.equal(runtime.submissions.filter(x => x.idempotencyKey === "old:result").length, 1);
 });
 
 for (const [status, kind] of [["COMPLETED", "Completed"], ["NO_PLAN", "Skipped"],
@@ -198,19 +210,24 @@ test("terminal combat or cancellation during a batch does not send recovery or l
 });
 
 test("missing resin icons stay unknown and do not send a false zero-resin snapshot", async () => {
-    const runtime = await createRuntime();
+    const runtime = await createRuntime({nextActions: [{status: "NEEDS_RESIN_SNAPSHOT"}, {status: "WAITING"}]});
     assert.equal(await runtime.physical.countOriginalResinBackup(), -1);
     assert.equal(await runtime.physical.countCondensedResin(), -1);
     await runtime.run();
-    assert.doesNotMatch(runtime.claims[0], /originalResinCount|condensedResinCount/);
+    assert.equal(runtime.claims.length, 2);
+    assert(runtime.claims[0].includes("prepareOnly=true"));
+    assert.doesNotMatch(runtime.claims[1], /originalResinCount|condensedResinCount/);
     assert(runtime.logs.some(line => line.includes("树脂快照含未知值")));
 });
 
 test("an explicitly recognized zero resin count remains zero", async () => {
-    const runtime = await createRuntime({ resinVisible: true });
+    const runtime = await createRuntime({ resinVisible: true,
+        nextActions: [{status: "NEEDS_RESIN_SNAPSHOT"}, {status: "WAITING"}] });
     await runtime.run();
-    assert.match(runtime.claims[0], /originalResinCount=0/, runtime.logs.filter(line => line.includes("树脂快照")).join("\n"));
-    assert.match(runtime.claims[0], /condensedResinCount=0/);
+    assert.equal(runtime.claims.length, 2);
+    assert.doesNotMatch(runtime.claims[0], /originalResinCount/);
+    assert.match(runtime.claims[1], /originalResinCount=0/, runtime.logs.filter(line => line.includes("树脂快照")).join("\n"));
+    assert.match(runtime.claims[1], /condensedResinCount=0/);
 });
 
 const bossAction = { status: "ACTION", actionType: "WORLD_BOSS", actionId: "boss-1", revision: 1,

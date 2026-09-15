@@ -483,6 +483,11 @@ declare const file: {
    * @returns 文件内容
    */
   readTextSync(path: string): string;
+  /** 严格读取；保留原生缺失、权限、格式错误，不用空字符串代替读取失败。 */
+  readTextSyncOrThrow(path: string): string;
+  /** 原文匹配后原子写入；null表示文件不存在。冲突返回false，I/O错误抛出，不能按成功消费。 */
+  compareExchangeTextSync(path: string, expectedContent: string | null, content: string): boolean;
+  readTextOrThrow(path: string): Promise<string>;
   /**
    * 异步读取文本文件
    * @param path 文件路径
