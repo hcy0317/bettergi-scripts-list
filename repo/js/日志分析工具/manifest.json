@@ -10,6 +10,5 @@
       "links": "https://github.com/this-Fish"
     }
   ],
-  "settings_ui": "settings.json",
   "main": "main.js"
 }
