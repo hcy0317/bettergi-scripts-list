@@ -16,6 +16,7 @@
     const taskOutcomes = [];
     let recoveryInProgress = false;
     let continuationAllowed = true;
+    let weeklyEntryRecoveryUsed = false;
     function checkTask() {
         try { taskResult.check(); }
         catch (error) { continuationAllowed = false; throw error; }
@@ -82,6 +83,38 @@
             last.slice(0, 24).map(row => row.text.replace(/\d{6,}/g, '[number]')).join('|').slice(0, 1000));
         throw codedError('UI_EXPECTED_TEXT_MISSING', '未确认操作页面：' + text);
     }
+    // 阶段确认只读同源证据，不点击；同一帧不能被计作两次确认。
+    async function observeUiStage(phase, proofFromRows, rect = [0, 0, 1920, 1080], after = null, inputCompletedAt = 0) {
+        const deadline = Date.now() + 3000;
+        let previous = null;
+        let lastRows = [];
+        let lastSource = null;
+        do {
+            checkTask();
+            const sample = tryReadUiRows(phase, rect, inputCompletedAt);
+            if (sample && Date.now() < deadline) {
+                const acquiredAt = Number(sample.source.CapturedAt.ToUnixTimeMilliseconds());
+                lastRows = sample.rows;
+                lastSource = sample.source;
+                const followsInput = acquiredAt > inputCompletedAt && (!after || sample.source.IsAfter(after));
+                const proof = followsInput ? proofFromRows(sample.rows) : null;
+                if (proof !== null && proof !== undefined) {
+                    if (previous && previous.proof === proof && sample.source.IsAfter(previous.source)) {
+                        log.debug('MONDAY_STAGE phase={phase} state=confirmed source={source} proof={proof}',
+                            phase, sample.source.Sequence, String(proof).replace(/\d{6,}/g, '[number]').slice(0, 160));
+                        return sample;
+                    }
+                    if (!previous || sample.source.IsAfter(previous.source)) previous = { proof, source: sample.source };
+                } else previous = null;
+            } else previous = null;
+            await sleep(100);
+        } while (Date.now() < deadline);
+        log.debug('MONDAY_STAGE phase={phase} state=unconfirmed source={source} rows={rows}', phase,
+            lastSource ? lastSource.Sequence : null,
+            lastRows.slice(0, 24).map(row => row.text.replace(/\d{6,}/g, '[number]')).join('|').slice(0, 1000));
+        return null;
+    }
+
     async function readWeeklyForgingProgress() {
         await genshin.returnMainUi();
         keyPress('F4');
@@ -143,6 +176,34 @@
         await genshin.recoverMainUi(failureContext || null);
         checkTask();
         recoveryInProgress = false;
+    }
+    async function requireWeeklyWorld(allowEntryRecovery = false) {
+        checkTask();
+        if (typeof genshin.inspectWorldUi !== 'function')
+            throw codedError('HOST_WORLD_OBSERVATION_REQUIRED', '周一入场需要世界操作观测接口');
+        function observe() {
+            checkTask();
+            const value = JSON.parse(genshin.inspectWorldUi());
+            const age = Date.now() - Number(value.source?.capturedAtUnixMs);
+            const usable = value.source?.known === true && Number.isFinite(age) && age >= 0 && age <= 2000;
+            log.debug('MONDAY_WORLD kind={kind} reason={reason} ageMs={age} canProbe={probe}',
+                value.kind, value.reason, Number.isFinite(age) ? age : null, usable && value.canProbe === true);
+            return { ...value, usable };
+        }
+        let observed = observe();
+        let recovered = false;
+        if (observed.usable && observed.kind === 'TemporarilyUnavailable' && allowEntryRecovery && !weeklyEntryRecoveryUsed) {
+            weeklyEntryRecoveryUsed = true;
+            // 只在周一非战斗任务入场使用既有神像恢复；先保存原始失败现场。
+            await recoverBoundary('AutoMonday/world-entry:' + String(observed.reason).slice(0, 80));
+            await genshin.tpToStatueOfTheSeven();
+            await genshin.returnMainUi();
+            observed = observe();
+            recovered = true;
+        }
+        if (!observed.usable || observed.canProbe !== true)
+            throw codedError('UI_WORLD_NOT_READY', '未确认可进行非消费UI探测：' + observed.reason);
+        return recovered;
     }
     function aggregateOutcomes(outcomes = taskOutcomes) {
         const priority = { Skipped: 0, Completed: 1, Deferred: 2, NeedsReconcile: 3, Failed: 4, Cancelled: 5 };
@@ -374,7 +435,23 @@
      * @param {number} clickOffsetY - 点击位置Y轴偏移量
      * @param {number} tt - 匹配阈值(0-1)
      */
-    async function imageRecognitionEnhanced(
+    function uiSourceFresh(source) {
+        const at = source && source.IsKnown ? Number(source.CapturedAt.ToUnixTimeMilliseconds()) : NaN;
+        return Number.isFinite(at) && Date.now() - at >= 0 && Date.now() - at <= 2000;
+    }
+    function applyUiMatch(match, behavior) {
+        if (!match.found || !behavior) return match;
+        checkTask();
+        if (!uiSourceFresh(match.source)) return { found: false, error: 'UI_SOURCE_UNAVAILABLE' };
+        if (behavior === 1) click(match.x, match.y);
+        else if (behavior === 2) keyPress('F');
+        return match;
+    }
+    // 兼容既有调用参数；观察助手本身没有输入副作用，debug仅影响日志。
+    async function imageRecognitionEnhanced(...args) {
+        return applyUiMatch(await findUiImage(...args), args[2] || 0);
+    }
+    async function findUiImage(
         imagefilePath = "空参数",
         timeout = 10,
         afterBehavior = 0,
@@ -414,6 +491,7 @@
 
             // 循环尝试识别
             for (let attempt = 0; attempt < 10; attempt++) {
+                checkTask();
                 if (Date.now() - startTime > timeout * 1000) {
                     if (debugmodel === 1) {
                         log.info(`${timeout}秒超时退出，未找到图片`);
@@ -422,7 +500,8 @@
                 }
 
                 captureRegion = captureGameRegion();
-                if (!captureRegion) {
+                if (!captureRegion || !uiSourceFresh(captureRegion.FrameStamp)) {
+                    if (captureRegion) { captureRegion.dispose(); captureRegion = null; }
                     await sleep(200);
                     continue;
                 }
@@ -432,7 +511,7 @@
                     croppedRegion = captureRegion.DeriveCrop(xa, ya, wa, ha);
                     const res = croppedRegion.Find(Imagidentify);
 
-                    if (res.isEmpty()) {
+                    if (res.isEmpty() || !uiSourceFresh(captureRegion.FrameStamp)) {
                         if (debugmodel === 1) {
                             log.info("识别图片中...");
                         }
@@ -455,21 +534,13 @@
                             log.info("计算后点击位置：({x},{y})", clickX, clickY);
                         }
 
-                        // 执行识别后行为
-                        if (afterBehavior === 1) {
-                            await sleep(1000);
-                            click(clickX, clickY);
-                        } else if (afterBehavior === 2) {
-                            await sleep(1000);
-                            keyPress("F");
-                        }
-
                         result = {
                             x: clickX,
                             y: clickY,
                             w: res.width,
                             h: res.height,
-                            found: true
+                            found: true,
+                            source: captureRegion.FrameStamp
                         };
                         break;
                     }
@@ -500,7 +571,7 @@
      * @param {string} text - 要识别的文字，默认为"空参数"，空字符串会匹配任意文字
      * @param {number} timeout - 超时时间，单位为秒，默认为10秒
      * @param {number} afterBehavior - 点击模式，0=不点击，1=点击文字位置，2=按F键，默认为0
-     * @param {number} debugmodel - 调试模式，0=无输出，1=基础日志，2=详细输出，3=立即返回，默认为0
+     * @param {number} debugmodel - 调试日志级别；所有级别的观察与输入时机相同
      * @param {number} x - OCR识别区域起始X坐标，默认为0
      * @param {number} y - OCR识别区域起始Y坐标，默认为0
      * @param {number} w - OCR识别区域宽度，默认为1920
@@ -508,7 +579,10 @@
      * @param {number} matchMode - 匹配模式，0=包含匹配，1=精确匹配，默认为0
      * @returns {object} 包含识别结果的对象 {text, x, y, found}
      */
-    async function textOCREnhanced(
+    async function textOCREnhanced(...args) {
+        return applyUiMatch(await findUiText(...args), args[2] || 0);
+    }
+    async function findUiText(
         text = "空参数",
         timeout = 10,
         afterBehavior = 0,
@@ -534,9 +608,15 @@
         }
 
         while (Date.now() - startTime < timeoutMs) {
+            checkTask();
             try {
                 // 获取截图并进行OCR识别
                 captureRegion = captureGameRegion();
+                if (!uiSourceFresh(captureRegion.FrameStamp)) {
+                    captureRegion.dispose(); captureRegion = null;
+                    await sleep(100);
+                    continue;
+                }
                 const resList = captureRegion.findMulti(RecognitionObject.ocr(x, y, w, h));
 
                 // 遍历识别结果
@@ -556,48 +636,25 @@
                         isMatched = res.text.includes(text);
                     }
 
-                    if (isMatched) {
+                    if (isMatched && uiSourceFresh(captureRegion.FrameStamp)) {
                         // 只在调试模式1下输出匹配成功信息
                         if (debugmodel === 1) {
                             log.info(`OCR成功: "${res.text}" 位置(${res.x},${res.y})`);
                         }
 
-                        // 调试模式3: 立即返回
-                        if (debugmodel === 3) {
-                            // 释放内存
-                            if (captureRegion) {
-                                captureRegion.dispose();
-                            }
-                            return { text: res.text, x: res.x, y: res.y, found: true };
-                        }
-
-                        // 执行后续行为
-                        switch (afterBehavior) {
-                            case 1: // 点击文字位置
-                                await sleep(1000);
-                                click(res.x, res.y);
-                                break;
-                            case 2: // 按F键
-                                await sleep(100);
-                                keyPress("F");
-                                break;
-                            default:
-                                // 不执行任何操作
-                                break;
-                        }
-
-                        // 记录最后一个匹配结果但不立即返回
-                        lastResult = { text: res.text, x: res.x, y: res.y, found: true };
+                        lastResult = { text: res.text, x: res.x, y: res.y, found: true, source: captureRegion.FrameStamp };
+                        break;
                     }
                 }
 
                 // 释放截图对象内存
                 if (captureRegion) {
                     captureRegion.dispose();
+                    captureRegion = null;
                 }
 
                 // 如果找到匹配结果，根据调试模式决定是否立即返回
-                if (lastResult && debugmodel !== 2) {
+                if (lastResult) {
                     return lastResult;
                 }
 
@@ -608,7 +665,9 @@
                 // 发生异常时释放内存
                 if (captureRegion) {
                     captureRegion.dispose();
+                    captureRegion = null;
                 }
+                checkTask();
                 log.error(`OCR异常: ${error.message}`);
                 await sleep(100);
             }
@@ -801,6 +860,7 @@
     //放置质变仪
     async function deployTransformer() {
         //放置质变仪
+        await requireWeeklyWorld(); // 路线后的危险不能通过传送后直接部署来掩盖。
         await sleep(500);
         await keyPress("B");
         await sleep(1000);
@@ -819,9 +879,17 @@
             return false;//质变仪找不到就直接退出
         } else {
             await sleep(1000);
+            const before = await observeUiStage('zby-deploy-button', rows =>
+                rows.some(row => row.text.trim() === '部署') ? '部署' : null, [1550, 950, 300, 100]);
+            if (!before) return false;
             await click(1699, 1004);
+            const inputCompletedAt = Date.now();
             await sleep(1000);//点击部署操作
             await genshin.returnMainUi();
+            const interaction = await observeUiStage('zby-placed-interaction', rows =>
+                rows.some(row => row.text.includes('参量质变仪')) ? '参量质变仪' : null,
+                [1205, 508, 140, 53], before.source, inputCompletedAt);
+            if (!interaction) return false;
         }
         return true;
     }
@@ -832,10 +900,15 @@
         //检测并进入质变仪界面
         await middleButtonClick();
         await sleep(1000);
-        let Fmeun = await textOCREnhanced("参量质变仪", 2, 2, 0, 1205, 508, 140, 53);//单条F检测
+        const interaction = await observeUiStage('zby-before-interact', rows =>
+            rows.some(row => row.text.includes('参量质变仪')) ? '参量质变仪' : null, [1205, 508, 140, 53]);
+        if (!interaction) return false;
         await keyPress("F");
-        let CHAx = await imageRecognitionEnhanced(CHA, 3, 0, 0, 1766, 3, 140, 90);
-        if (!Fmeun.found && !CHAx.found) { return false; }
+        const interactedAt = Date.now();
+        const materialPage = await observeUiStage('zby-material-page', rows =>
+            rows.some(row => row.text.includes('进行质变')) ? '进行质变' : null,
+            [1675, 994, 150, 50], interaction.source, interactedAt);
+        if (!materialPage) return false;
 
         //检测是否到达材料页面
         const startTransform = await textOCREnhanced("进行质变", 3, 0, 3, 1675, 994, 150, 50); if (!startTransform.found) { throw new Error("质变仪页面未打开"); }//单条F检测
@@ -859,47 +932,50 @@
                 break;
         }
 
-        //滚轮预操作
-        await moveMouseTo(1287, 131);
-        await sleep(100);
-        await leftButtonDown();
-        await sleep(100);
-        await moveMouseTo(1287, 161);
+        // 每次滚动是独立输入，不跨OCR/等待持有鼠标。取消后无需绕过宿主guard补发松键。
+        await moveMouseTo(1100, 500);
         // 薄荷图片检测
-        let YOffset = 0; // Y轴偏移量，根据需要调整
         const maxRetries = 20; // 最大重试次数
         let retries = 0; // 当前重试次数
         while (retries < maxRetries) {
             const ifBh = await imageRecognitionEnhanced(BH, 1, 0, 0, 115, 115, 1155, 845);
             if (ifBh.found) {
-                await leftButtonUp();
                 await sleep(500);
                 await click(ifBh.x, ifBh.y);
                 await sleep(1000);
                 await click(440, 1008);  //选择最大数量
-                await sleep(1000);
+                const selectedAt = Date.now();
+                const selection = await observeUiStage('zby-material-total', rows => {
+                    const totals = rows.map(row => row.text.replace(/\s/g, '')).filter(text => /^\d+\/150$/.test(text));
+                    return totals.length === 1 && totals[0] === '150/150' ? '150/150' : null;
+                }, [0, 0, 1920, 1080], materialPage.source, selectedAt);
+                if (!selection) return false;
                 await click(1792, 1019); //质变按钮
-                const zbPanel = await textOCREnhanced("参量质变仪", 3, 0, 3, 828, 253, 265, 73);
-                if (!zbPanel.found) throw codedError('ZBY_CONFIRMATION_NOT_FOUND', '材料确认页面未出现，禁止提交');
-                await sleep(1000);
+                const confirmationAt = Date.now();
+                const confirmProof = rows => rows.some(row => row.text.includes('参量质变仪')) &&
+                    rows.some(row => row.text.trim() === '确认') ? '参量质变仪/确认' : null;
+                const confirmation = await observeUiStage('zby-material-confirmation', confirmProof,
+                    [600, 220, 720, 600], selection.source, confirmationAt);
+                if (!confirmation) throw codedError('ZBY_CONFIRMATION_NOT_FOUND', '材料确认页面未出现，禁止提交');
                 await beginAction('质变仪');
+                // 持久化可能迟到；必须在提交前重新验证同一确认页，未决意图不能自动重放。
+                if (!await observeUiStage('zby-material-pre-submit', confirmProof,
+                    [600, 220, 720, 600], confirmation.source))
+                    throw codedError('CONSUMPTION_CONFIRMATION_CHANGED', '持久化后确认页变化，保留待复核意图');
                 await click(1183, 764); //确认 ;
                 await sleep(1000);
                 await genshin.returnMainUi();
                 return true
             }
             retries++; // 重试次数加1
-            //滚轮操作
-            YOffset += 50;
-            await sleep(500);
-            if (retries === maxRetries || 161 + YOffset > 1080) {
-                await leftButtonUp();
-                await sleep(100);
-                await moveMouseTo(1287, 131);
-                await genshin.returnMainUi();
+            if (retries === maxRetries) {
                 log.error("未找到材料！");
+                return false;
             }
-            await moveMouseTo(1287, 161 + YOffset);
+            const page = await nextUiRows('zby-material-scroll');
+            if (!page.rows.some(row => row.text.includes('进行质变'))) return false;
+            checkTask();
+            await verticalScroll(-1);
             await sleep(300);
         }
         return false;
@@ -907,6 +983,8 @@
 
     //切换队伍
     async function switchPartyIfNeeded(partyName) {
+        await genshin.returnMainUi();
+        await requireWeeklyWorld(true);
         if (!partyName) {
             await genshin.returnMainUi();
             return;
@@ -914,8 +992,9 @@
         try {
             log.info("正在尝试切换至" + partyName);
             if (!await genshin.switchParty(partyName)) {
-                log.info("切换队伍失败，前往七天神像重试");
-                await genshin.tpToStatueOfTheSeven();
+                // false本身不证明可恢复，不把名称错误/未知UI归因为战斗；只有新危险证据可用同一owner恢复一次。
+                if (!await requireWeeklyWorld(true))
+                    throw codedError('PARTY_SWITCH_FAILED', '指定队伍未确认切换成功，且没有新的可恢复世界证据');
                 if (!await genshin.switchParty(partyName)) throw codedError('PARTY_SWITCH_FAILED', '指定队伍未确认切换成功');
             }
         } catch (error) {
@@ -1225,6 +1304,7 @@
                 return taskOutcome('Skipped', 'CD_ACTIVE');
             }
 
+            await requireWeeklyWorld(true);
             await sleep(500);
             await keyPress("B");
             await sleep(1000);
@@ -1794,6 +1874,7 @@
                 }
                 log.info("开始执行任务：{name}", task.name);
                 activeAction = null;
+                weeklyEntryRecoveryUsed = false;
                 let outcome;
                 try {
                     outcome = await task.func();

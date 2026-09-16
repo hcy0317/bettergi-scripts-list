@@ -1,5 +1,5 @@
 {
-  "time": "20260915120526",
+  "time": "20260917002957",
   "url": "https://github.com/babalae/bettergi-scripts-list/archive/refs/heads/main.zip",
   "file": "repo.json",
   "indexes": [
@@ -108571,7 +108571,7 @@
         {
           "name": "AutoCommissionNova",
           "type": "directory",
-          "version": "1.0.3",
+          "version": "1.0.4",
           "author": "DarkFlameMaster",
           "authors": [
             {
@@ -108581,6 +108581,7 @@
           ],
           "description": "自动每日委托~|~自动识别接取完成每日委托,目前挪德卡莱地区稳定支持,其他地区等待完善,使用前请阅读README",
           "tags": [
+            "bgi≥0.64.2-alpha.4-runtimefix.20260916.2",
             "委托",
             "对话",
             "战斗",
@@ -108911,7 +108912,7 @@
         {
           "name": "AutoMonday",
           "type": "directory",
-          "version": "1.4.7",
+          "version": "1.4.8",
           "author": "江紫烟owo",
           "authors": [
             {
@@ -108925,7 +108926,7 @@
           ],
           "description": "全自动周一~|~全自动周常：包含纪行、爱可菲和参变仪等，详情见readme",
           "tags": [
-            "bgi≥0.64.2-alpha.4-runtimefix.20260915.1",
+            "bgi≥0.64.2-alpha.4-runtimefix.20260915.2",
             "周常",
             "纪行",
             "烹饪",
@@ -108933,7 +108934,7 @@
             "质变仪",
             "投资券"
           ],
-          "lastUpdated": "2026-08-19 10:42:56"
+          "lastUpdated": "2026-09-15 12:38:58"
         },
         {
           "name": "AutoNewsKiller",
@@ -110532,7 +110533,7 @@
           "tags": [
             "bgi≥0.63.0"
           ],
-          "lastUpdated": "2026-09-14 09:53:15"
+          "lastUpdated": "2026-09-15 12:43:45"
         },
         {
           "name": "模板匹配区域坐标输出",
@@ -110694,7 +110695,7 @@
             "购买商品",
             "模拟点击"
           ],
-          "lastUpdated": "2026-09-13 09:49:24"
+          "lastUpdated": "2026-09-15 12:36:44"
         },
         {
           "name": "自动领取成就奖励",

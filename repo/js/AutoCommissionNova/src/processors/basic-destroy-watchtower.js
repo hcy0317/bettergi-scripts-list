@@ -7,6 +7,7 @@ import { bvPageOcrRegionText } from "../vision/ocr-utils.js";
 import { defineStep } from "./define-step.js";
 import { isCancellationError } from "../utils/error-utils.js";
 import { readTrackedDescriptionText } from "./commission-desc-utils.js";
+import { retireScopedTask } from "../utils/async-task-retirement.js";
 
 const WATCHTOWER_CONFIG = {
     /** 单次执行最多摧毁的哨塔数量；攀高危险最多两个，之后的任务图标可能属于其他委托。 */
@@ -361,26 +362,13 @@ function createCombatLoop(fullScript, strategyCount) {
 async function stopCombatLoop(combat) {
     combat.state.intentionalCancel = true;
     combat.cts.Cancel();
-    const completed = await Promise.race([
-        combat.task.then(() => true),
-        sleep(WATCHTOWER_CONFIG.combatCancelTimeout).then(() => false),
-    ]);
+    const completed = await dispatcher.waitForTask(combat.task, WATCHTOWER_CONFIG.combatCancelTimeout);
     if (!completed) {
         throw new Error(`取消哨塔简易策略超过 ${WATCHTOWER_CONFIG.combatCancelTimeout / 1000} 秒仍未退出`);
     }
     if (combat.state.error && !isCancellationError(combat.state.error)) {
         throw combat.state.error;
     }
-}
-
-/**
- * 释放简易策略的取消令牌源。
- * @param {{cts: Object}|null} combat - 当前战斗句柄
- * @returns {void}
- */
-function disposeCombatLoop(combat) {
-    if (!combat) return;
-    try { combat.cts.Dispose(); } catch (_) { /* ClearScript 版本可能不暴露 Dispose。 */ }
 }
 
 /**
@@ -407,6 +395,7 @@ async function attackUntilDestroyed(initialCount, strategies, context) {
     const fullScript = strategies.join("\n");
     const combat = createCombatLoop(fullScript, strategies.length);
     let result = null;
+    let failure = null;
     try {
         while (result === null) {
             assertCombatLoopRunning(combat);
@@ -436,14 +425,10 @@ async function attackUntilDestroyed(initialCount, strategies, context) {
         await stopCombatLoop(combat);
         return result;
     } catch (error) {
-        if (!combat.state.intentionalCancel) await stopCombatLoop(combat);
+        failure = error;
         throw error;
     } finally {
-        if (!combat.state.intentionalCancel) {
-            combat.state.intentionalCancel = true;
-            try { combat.cts.Cancel(); } catch (_) { /* 已释放或已取消。 */ }
-        }
-        disposeCombatLoop(combat);
+        await retireScopedTask(combat, failure);
     }
 }
 
