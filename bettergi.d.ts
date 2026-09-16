@@ -322,6 +322,8 @@ declare const genshin: {
    * @returns 是否成功
    */
   switchParty(partyName: string): Promise<boolean>;
+  /** 只读世界操作证据JSON；Unknown/canProbe不表示战斗结束，也不能授权消费。 */
+  inspectWorldUi(): string;
   /**
    * 清除当前调度器的队伍缓存
    */
@@ -653,6 +655,8 @@ declare const dispatcher: {
    * @returns 取消令牌
    */
   getLinkedCancellationToken(): CancellationToken;
+  /** 等待本脚本的宿主任务。超时返回false；不把超时当取消完成，仍须退休原任务。 */
+  waitForTask(task: Promise<unknown>, timeoutMilliseconds: number): Promise<boolean>;
   /**
    * 运行自动秘境任务
    * @param param 秘境任务参数
