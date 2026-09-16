@@ -6,17 +6,46 @@ import assert from 'node:assert/strict';
 const sourcePath = new URL('../repo/js/AutoMonday/main.js', import.meta.url);
 const source = fs.readFileSync(sourcePath, 'utf8');
 
+test('production recognition helpers stay pure and debug does not change input or timing', async () => {
+    const helpers = source.slice(source.indexOf('    function uiSourceFresh('), source.indexOf('    async function includes('));
+    assert.ok(helpers.includes('async function findUiText('));
+    for (const debug of [0, 1, 2, 3]) {
+        let now = 1000, inputs = 0, disposed = 0;
+        const context = vm.createContext({
+            Date: { now: () => now }, checkTask() {}, sleep: async ms => { now += ms; },
+            log: { info() {}, warn() {}, error() {} }, click() { inputs++; }, keyPress() { inputs++; },
+            RecognitionObject: { ocr: (...roi) => ({ roi }), TemplateMatch: () => ({}) },
+            file: { ReadImageMatSync: () => ({ dispose() {} }) },
+            captureGameRegion: () => ({
+                FrameStamp: { IsKnown: true, CapturedAt: { ToUnixTimeMilliseconds: () => now } },
+                dispose() { disposed++; },
+                findMulti: () => ({ count: 1, 0: { text: '目标', x: 10, y: 20 } }),
+                DeriveCrop: () => ({ dispose() {}, Find: () => ({ isEmpty: () => false, x: 10, y: 20, width: 30, height: 40 }) })
+            })
+        });
+        vm.runInContext(helpers, context);
+        assert.equal((await vm.runInContext(`findUiText('目标', 1, 1, ${debug})`, context)).found, true);
+        assert.equal((await vm.runInContext(`findUiImage('asset', 1, 1, ${debug})`, context)).found, true);
+        assert.equal(inputs, 0);
+        assert.equal(now, 1000);
+        assert.equal(disposed, 2);
+        await vm.runInContext(`textOCREnhanced('目标', 1, 1, ${debug})`, context);
+        assert.equal(inputs, 1);
+        assert.equal(now, 1000);
+    }
+});
+
 function replay(options = {}) {
     let now = Date.UTC(2026, 8, 14, 4), explicit = false, legacyMissingReads = 0, recoveryCalls = 0, capturedFrames = 0;
     const logs = [], reports = [], inputs = [], writes = [], data = new Map(Object.entries(options.files || {}));
-    let concurrentInjected = false;
+    let concurrentInjected = false, statueRecoveries = 0;
     function injectConcurrentProgress(path) {
         if (!concurrentInjected && options.concurrentProgress && path.endsWith('_progress.v1.json')) {
             concurrentInjected = true;
             data.set(path, options.concurrentProgress);
         }
     }
-    const game = { page: 'world', placed: false, consumedAt: null, akfEAt: null, receiptClosed: false, consumptionProofs: [],
+    const game = { page: 'world', placed: false, partyAttempts: 0, consumedAt: null, akfEAt: null, receiptClosed: false, consumptionProofs: [],
         forgeCount: options.forgeCount || 0, forgeQueued: 0, forgeInputs: [],
         templateDisposals: [], cropsCreated: 0, cropsDisposed: 0,
         investmentOwned: options.investmentOwned === true, investmentLocation: false, investmentDismiss: 0,
@@ -32,6 +61,10 @@ function replay(options = {}) {
     const absent = () => ({ isEmpty: () => true });
     function findImage(ro) {
         const path = ro.imagePath || '';
+        if (options.cancelDuringMaterialSearch && path.endsWith('薄荷.png') && game.page === 'material') {
+            options.cancelled = true;
+            throw new Error('cancelled during material search');
+        }
         if (options.forging && game.page === 'forge-recipes' && path.endsWith('/锻造水晶块.png'))
             return { isEmpty: () => false, x: 100, y: 60, width: 50, height: 50 };
         if (options.domain && !path) return { text: game.activeFights && now - game.fightStartedAt >= 1000 ?
@@ -60,9 +93,10 @@ function replay(options = {}) {
                 words = ['获得'];
         }
         if (options.transformerSuccess) {
-            if (game.page === 'gadget') words = ['小道具'];
-            if (game.page === 'material') words = ['进行质变', '材料'];
-            if (game.page === 'material-confirm' || (game.page === 'world' && game.placed && game.consumedAt === null)) words = ['参量质变仪'];
+            if (game.page === 'gadget') words = ['小道具', ...(options.wrongDeployButton ? ['装备'] : ['部署'])];
+            if (game.page === 'material') words = ['进行质变', '材料', options.insufficientMaterials ? '149/150' : '150/150'];
+            if (game.page === 'material-confirm') words = ['参量质变仪', options.changedMaterialConfirmation ? '购买' : '确认'];
+            if (game.page === 'world' && game.placed && game.consumedAt === null) words = ['参量质变仪'];
             if (game.page === 'world' && game.consumedAt !== null && now - game.consumedAt >= 2500 && !game.receiptClosed)
                 words = ['质变产生了以下物质'];
         }
@@ -161,7 +195,7 @@ function replay(options = {}) {
             else if (game.page === 'investment-state' && game.investmentOwned) game.page = 'investment-selection';
         }
         if (options.forging && key === 'F4') game.page = 'weekly-tabs';
-        if (key === 'F' && game.placed) game.page = 'material';
+        if (key === 'F' && game.placed && !options.dropMaterialInteraction) game.page = 'material';
         if (key === 'F' && game.page === 'net-npc') game.page = 'net-dialogue';
         if (key === 'VK_ESCAPE' && ['net-quantity', 'net-reward'].includes(game.page)) game.page = 'net-shop';
         if (options.fatesShop && key === 'VK_ESCAPE') {
@@ -209,7 +243,9 @@ function replay(options = {}) {
             if (x === 980 && y === 900 && game.page === 'forge-reward') game.page = 'forge-recipes';
         }
         if (x === 1067 && y === 57 && game.page === 'bag') game.page = 'gadget';
-        if (x === 1699 && y === 1004 && game.page === 'gadget') { game.placed = true; game.page = 'world'; }
+        if (x === 1699 && y === 1004 && game.page === 'gadget' && !options.dropTransformerPlacement) {
+            game.placed = true; game.page = 'world';
+        }
         if (x === 1792 && y === 1019 && game.page === 'material') game.page = 'material-confirm';
         if (x === 1183 && y === 764 && game.page === 'material-confirm') {
             game.consumptionProofs.push(data.get('record/test-account_progress.v1.json'));
@@ -319,7 +355,16 @@ function replay(options = {}) {
             if (options.cooking && path.endsWith('每周做菜.json')) game.page = 'cook-world';
             return options.routeWithoutReceipt ? undefined : { success: true };
         } },
-        genshin: { switchParty: async () => true, tpToStatueOfTheSeven: async () => { inputs.push(['statue']); },
+        genshin: { switchParty: async () => { game.partyAttempts++; return !options.partyFailure &&
+            (!options.partyTemporary || game.partyAttempts > 1); },
+            tpToStatueOfTheSeven: async () => { inputs.push(['statue']); statueRecoveries++; },
+            inspectWorldUi: () => JSON.stringify({ kind: options.worldUnsafe &&
+                (statueRecoveries === 0 || options.worldRecoveryFails) || options.partyTemporary && game.partyAttempts > 0 && statueRecoveries === 0
+                ? 'TemporarilyUnavailable' : 'Unknown',
+                reason: 'recorded-world-observation',
+                canProbe: (!options.worldUnsafe || statueRecoveries > 0 && !options.worldRecoveryFails) &&
+                    !(options.partyTemporary && game.partyAttempts > 0 && statueRecoveries === 0),
+                source: { known: true, capturedAtUnixMs: now } }),
             tp: async () => { assert.equal(game.activeFights, 0, 'teleport cannot overlap the previous native battle'); game.page = 'domain-entrance'; },
             returnMainUi: async () => { game.page = 'world'; }, recoverMainUi: async () => {
             recoveryCalls++;
@@ -797,6 +842,69 @@ test('a pending transformer consumption prevents opening another material submis
     assert.equal(result.reports[0][0], 'NeedsReconcile');
     assert.equal(result.inputs.length, 0);
     assert.equal(result.writes.length, 0);
+});
+
+test('unconfirmed placement does not proceed to material interaction', async () => {
+    const result = await replay({ transformerSuccess: true, dropTransformerPlacement: true });
+    assert.equal(result.reports[0][0], 'Deferred');
+    assert.match(result.reports[0][1], /ZBY_DEPLOYMENT_UNCONFIRMED/);
+    assert.equal(result.game.consumptionProofs.length, 0);
+    assert.equal(result.inputs.some(input => input[0] === 'key' && input[1] === 'F'), false);
+    assert.equal(result.writes.some(([path]) => path.endsWith('_cd.txt')), false);
+});
+
+for (const fault of ['wrongDeployButton', 'dropMaterialInteraction', 'insufficientMaterials', 'changedMaterialConfirmation']) {
+    test(`transformer ${fault} cannot submit consumption or stamp cooldown`, async () => {
+        const result = await replay({ transformerSuccess: true, [fault]: true });
+        assert.notEqual(result.reports[0][0], 'Completed');
+        assert.equal(result.game.consumptionProofs.length, 0);
+        assert.equal(result.game.heldKeys.size, 0);
+        assert.equal(result.game.holdingMouse, false);
+        assert.equal(result.writes.some(([path]) => path.endsWith('_cd.txt')), false);
+    });
+}
+
+test('unsafe weekly entry uses one existing statue recovery before any bag input', async () => {
+    const result = await replay({ transformerSuccess: true, worldUnsafe: true });
+    assert.equal(result.reports[0][0], 'Completed');
+    assert.equal(result.inputs.filter(input => input[0] === 'statue').length, 1);
+    assert.equal(result.inputs[0][0], 'statue');
+});
+
+test('unresolved unsafe weekly entry does not retry recovery or open the bag', async () => {
+    const result = await replay({ transformerSuccess: true, worldUnsafe: true, worldRecoveryFails: true });
+    assert.notEqual(result.reports[0][0], 'Completed');
+    assert.equal(result.inputs.filter(input => input[0] === 'statue').length, 1);
+    assert.equal(result.inputs.some(input => input[0] === 'key' && input[1] === 'B'), false);
+    assert.equal(result.game.consumptionProofs.length, 0);
+});
+
+test('cancelling material search cannot leave the drag mouse pressed', async () => {
+    await assert.rejects(replay({ transformerSuccess: true, cancelDuringMaterialSearch: true }), error => {
+        assert.equal(error.replay.game.holdingMouse, false);
+        assert.equal(error.replay.game.consumptionProofs.length, 0);
+        return /cancelled/.test(error.message);
+    });
+});
+
+test('a failed party name does not authorize a blind teleport or repeated switch', async () => {
+    const result = await replay({ transformerSuccess: true, partyFailure: true, settings: { ZBYTeamName: '不存在' } });
+    assert.notEqual(result.reports[0][0], 'Completed');
+    assert.equal(result.game.partyAttempts, 1);
+    assert.equal(result.inputs.filter(input => input[0] === 'statue').length, 0);
+});
+
+test('party failure cannot spend a second recovery after unsafe entry already recovered', async () => {
+    const result = await replay({ transformerSuccess: true, worldUnsafe: true, partyFailure: true, settings: { ZBYTeamName: '水队' } });
+    assert.equal(result.inputs.filter(input => input[0] === 'statue').length, 1);
+    assert.equal(result.game.partyAttempts, 1);
+});
+
+test('fresh temporary party rejection can use the same single recovery owner', async () => {
+    const result = await replay({ transformerSuccess: true, partyTemporary: true, settings: { ZBYTeamName: '水队' } });
+    assert.equal(result.reports[0][0], 'Completed');
+    assert.equal(result.inputs.filter(input => input[0] === 'statue').length, 1);
+    assert.equal(result.game.partyAttempts, 2);
 });
 
 test('the full transformer path persists intent before material input and confirms a real completion panel', async () => {
