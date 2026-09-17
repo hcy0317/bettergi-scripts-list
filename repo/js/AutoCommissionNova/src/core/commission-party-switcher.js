@@ -91,20 +91,32 @@ export async function switchPartyWithRoles(teamName, roles) {
  * @returns {Promise<boolean>} 未命中白名单、无需换队或换队成功时返回 true
  */
 export async function prepareCommissionBattleParty(context) {
-    if (!loadBattlePartyWhitelist().has(context.commissionName)) return true;
+    if (!loadBattlePartyWhitelist().has(context.commissionName)) {
+        await prepareBattleVision(context);
+        return true;
+    }
 
     const resolved = resolvePartySelection(loadPartyConfigForContext(context), "battle");
     if (resolved.mode === "roles") {
         const switched = await switchPartyWithRoles(resolved.customTeamName, resolved.roles);
         if (!switched) throw new Error(`委托 ${context.commissionName} 重组战斗队伍失败: ${resolved.customTeamName}`);
+        await prepareBattleVision(context);
         return true;
     }
 
     if (!resolved.teamName) {
         log.warn("委托 {commission} 未配置战斗队伍，跳过切换队伍", context.commissionName);
+        await prepareBattleVision(context);
         return true;
     }
     const switched = await switchPartyByName(resolved.teamName);
     if (!switched) throw new Error(`委托 ${context.commissionName} 切换战斗队伍失败: ${resolved.teamName}`);
+    await prepareBattleVision(context);
     return true;
+}
+
+/** 在仍未接敌的队伍边界核对实际策略；宿主只准备模型，不启动战斗或消费技能。 */
+export async function prepareBattleVision(context) {
+    const resolved = resolvePartySelection(loadPartyConfigForContext(context), "battle");
+    await dispatcher.PrepareAutoFightTask(new AutoFightParam(resolved.strategy || "根据队伍自动选择"));
 }

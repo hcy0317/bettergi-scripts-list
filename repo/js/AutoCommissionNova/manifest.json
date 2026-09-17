@@ -1,8 +1,8 @@
 {
   "manifest_version": 1,
   "name": "自动每日委托",
-  "version": "1.0.4",
-  "bgi_version": "0.64.2-alpha.4-runtimefix.20260916.2",
+  "version": "1.0.5",
+  "bgi_version": "0.64.2-alpha.4-runtimefix.20260917.1",
   "tags": [
     "委托",
     "对话",

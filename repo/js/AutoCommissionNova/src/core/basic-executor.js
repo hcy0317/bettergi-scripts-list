@@ -40,8 +40,6 @@ export async function executeBasicCommission(commission, stepRegistry, accountUi
             return { success: false, context: null };
         }
 
-        await trackCommission(commission.name);
-
         const context = createCommissionContext({
             type: COMMISSION_TYPE.BASIC,
             country: commission.country || "蒙德",
@@ -55,6 +53,7 @@ export async function executeBasicCommission(commission, stepRegistry, accountUi
 
         try {
             await prepareCommissionBattleParty(context);
+            await trackCommission(commission.name);
             const success = await runStepsWithContext(context, { sleepMs: 1000, stopOnError: true });
             if (success) {
                 log.debug("Basic委托流程执行完成: {name}", commission.name);
