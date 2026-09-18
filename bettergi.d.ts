@@ -669,6 +669,9 @@ declare const dispatcher: {
    * @param customCt 自定义取消令牌（可选）
    */
   runAutoFightTask(param: AutoFightParam, customCt?: CancellationToken | null): Promise<void>;
+  /** 只准备模型，不启动战斗；空参数仅准备公共OCR。true表示已按当前队伍核对TXT/JSON策略，实际战斗仍重新取证。 */
+  prepareAutoFightTask(param?: AutoFightParam | null, customCt?: CancellationToken | null): Promise<boolean>;
+  PrepareAutoFightTask: typeof dispatcher.prepareAutoFightTask;
   /**
    * 运行自动地脉花任务
    * @param param 自动地脉花任务参数

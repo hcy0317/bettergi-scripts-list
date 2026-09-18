@@ -103,6 +103,7 @@ export async function prepareForCommission() {
             await genshin.returnMainUi();
         }
     }
+    await dispatcher.PrepareAutoFightTask(); // 尚未选择委托/队伍，只准备公共OCR，不提前猜测Q需求。
 }
 
 /**
