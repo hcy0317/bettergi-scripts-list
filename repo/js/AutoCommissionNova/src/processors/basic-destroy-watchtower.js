@@ -439,7 +439,9 @@ async function attackUntilDestroyed(initialCount, strategies, context) {
  */
 async function destroyAllWatchtowers(options, context) {
     let processedCount = 0;
-    let attackStrategies = null;
+    // 菜单收束和固定等待在接近前完成，到点后不再空站着做这些准备。
+    await genshin.returnMainUi();
+    await sleep(500);
 
     const pathCount = options.paths.length;
     while (processedCount < WATCHTOWER_CONFIG.maxDestroyCount &&
@@ -466,7 +468,9 @@ async function destroyAllWatchtowers(options, context) {
             }
         }
 
+        const arrivedAt = Date.now();
         const initialStatus = readDestroyStatus(context);
+        const statusMs = Date.now() - arrivedAt;
         const initialCount = initialStatus.progress ? initialStatus.progress.current : null;
         if (initialStatus.completed) return true;
         if (initialStatus.progress && initialStatus.progress.current >= initialStatus.progress.total) return true;
@@ -476,11 +480,11 @@ async function destroyAllWatchtowers(options, context) {
             log.warn("攻击前未识别到哨塔摧毁进度，将继续等待委托完成提示");
         }
 
-        if (!attackStrategies) {
-            await genshin.returnMainUi();
-            await sleep(500);
-            attackStrategies = loadCurrentTeamStrategies();
-        }
+        // 路径可能改变队伍；以到点后的当前队伍为准，不复用出发前名单。
+        const strategyAt = Date.now();
+        const attackStrategies = loadCurrentTeamStrategies();
+        log.debug("WATCHTOWER_HANDOFF arrivalToCombatMs={total} statusMs={status} strategyMs={strategy}",
+            Date.now() - arrivedAt, statusMs, Date.now() - strategyAt);
 
         const attackResult = await attackUntilDestroyed(initialCount, attackStrategies, context);
         if (attackResult === ATTACK_RESULT.COMPLETED) {
