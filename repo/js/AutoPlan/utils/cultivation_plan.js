@@ -408,13 +408,15 @@ async function executeCraftBatchAction(baseUrl, action, executorId, config) {
     return {shouldContinue: result.status === "REPLANNING", shouldReconcile: true, status: result.status, message: result.message};
 }
 
-async function runInventoryReconcileOnce(config, state, reason) {
-    if (state.attempted) {
-        log.warn("[计划驱动] 本轮已完成一次完整库存复核，不再重复检查：{0}", reason);
+async function runInventoryReconcileOnce(config, state, reason, rawCause) {
+    const cause = typeof rawCause === "string" && /^ACTION:[A-Za-z0-9_-]+$/.test(rawCause)
+        ? rawCause : "INITIAL";
+    if (state.attemptedCauses.has(cause)) {
+        log.warn("[计划驱动] 本原因已尝试完整库存复核，不再重复检查：{0}，{1}", cause, reason);
         return {performed: false, succeeded: true};
     }
-    state.attempted = true;
-    log.warn("[计划驱动] 本轮执行一次完整库存复核：{0}", reason);
+    state.attemptedCauses.add(cause);
+    log.warn("[计划驱动] 本原因执行一次完整库存复核：{0}，{1}", cause, reason);
     return {
         performed: true,
         succeeded: await reconcileInventoryCore(config),
@@ -489,7 +491,7 @@ async function runPlanCore(config) {
     const executorId = `autoplan-${uid}-${Date.now()}`;
     config.run.exclude_run_exception = false;
     config.run.loop_plan = false;
-    const inventoryReconcileState = {attempted: false};
+    const inventoryReconcileState = {attemptedCauses: new Set()};
     log.info(`[计划驱动] 已启用：合成按完整批次执行，其余任务每次领取一个行动`);
 
     const startRefreshCompleted = await refreshCurrentOwned(config, "计划开始前");
@@ -530,7 +532,7 @@ async function runPlanCore(config) {
             }
             if (action.status === "PLAN_NEEDS_RECONCILE") {
                 const reconcile = await runInventoryReconcileOnce(
-                    config, inventoryReconcileState, `计划请求复核：${action.message}`);
+                    config, inventoryReconcileState, `计划请求复核：${action.message}`, action.inventoryReconcileCause);
                 if (reconcile.succeeded && reconcile.performed) {
                     const afterReconcile = await claimNextAction();
                     if (afterReconcile.status === "ACTION" || afterReconcile.status === "NEEDS_RECONCILE") {
