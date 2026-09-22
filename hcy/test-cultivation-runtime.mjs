@@ -234,6 +234,60 @@ const bossAction = { status: "ACTION", actionType: "WORLD_BOSS", actionId: "boss
     materialName: "蕈王钩喙", reconcileGrid: "CharacterDevelopmentItems", batchLimit: 1,
     plan: { runType: "Boss", autoBoss: { bossName: "翠翎恐蕈", combatStrategyPath: "", reviveRetryCount: 3 } } };
 
+test("new completed business cause permits one more inventory scan in the same run", async () => {
+    const runtime = await createRuntime({ nextActions: [
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "INITIAL" },
+        { ...bossAction },
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "ACTION:boss-1" },
+        { ...bossAction, actionId: "boss-2" },
+        { status: "COMPLETED" },
+    ] });
+    await runtime.run();
+    assert.equal(runtime.events.filter(event => event === "boss").length, 2);
+    assert.equal(runtime.submissions.filter(body => body.idempotencyKey === "boss-1:result").length, 1);
+    assert.equal(runtime.submissions.filter(body => body.idempotencyKey === "boss-2:result").length, 1);
+    assert.equal(runtime.outcomes[0].kind, "Completed");
+});
+
+for (const cause of [undefined, null, "", 4, {}, "untrusted", "ACTION:", "ACTION:boss-old"]) {
+    test(`same normalized cause cannot gain scan budget from revision or target changes: ${JSON.stringify(cause)}`, async () => {
+        const runtime = await createRuntime({ nextActions: [
+            { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: cause, revision: 1 },
+            { ...bossAction },
+            { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: cause, revision: 2, materialName: "new-target" },
+            { ...bossAction, actionId: "must-not-run" },
+        ] });
+        await runtime.run();
+        assert.equal(runtime.events.filter(event => event === "boss").length, 1);
+        assert.equal(runtime.claims.length, 3);
+        assert.equal(runtime.submissions.filter(body => typeof body.observedOwned === "object").length, 3,
+            "only start, one cause, and final scan; final success cannot rewrite the drive outcome");
+        assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+        assert.match(runtime.outcomes[0].reason, /ALREADY_ATTEMPTED/);
+    });
+}
+
+test("an unresolved cause scan does not refund the attempt or claim another action", async () => {
+    const runtime = await createRuntime({ observationStatus: "NEEDS_RECONCILE", nextActions: [
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "ACTION:known" }, { ...bossAction },
+    ] });
+    await runtime.run();
+    assert.equal(runtime.claims.length, 1);
+    assert(!runtime.events.includes("boss"));
+    assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+});
+
+test("one post-scan claim that stays blocked cannot start another cause loop", async () => {
+    const runtime = await createRuntime({ nextActions: [
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "INITIAL" },
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "ACTION:new" }, { ...bossAction },
+    ] });
+    await runtime.run();
+    assert.equal(runtime.claims.length, 2);
+    assert(!runtime.events.includes("boss"));
+    assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+});
+
 test("a terminal boss exit does not teleport in finally or open inventory afterward", async () => {
     const runtime = await createRuntime({ nextActions: [bossAction],
         boss: () => { throw new Error("[BGI_COMBAT_UNCONFIRMED] 不执行复活重试"); } });
