@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "全自动周一",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "outcome_contract": "explicit-v1",
   "bgi_version": "0.64.2-alpha.4-runtimefix.20260915.2",
   "tags": [

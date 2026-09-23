@@ -1039,35 +1039,56 @@
         return sevenDaysLater.toISOString();
     }
 
-    // 返回当前时间的下周一四点的时间戳
+    // 游戏服务器刷新时间按 UTC+8 计算，避免运行环境时区不同造成偏差
+    const SERVER_TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+    // 返回“下一次周一 04:00（UTC+8）”的时间戳。
+    // 周一 04:00 前运行时，目标应是“当天 04:00”，而不是再下一周。
     function getNextMonday4AMISO() {
-        const now = new Date();
+        const nowMs = Date.now();
+        const serverNowMs = nowMs + SERVER_TIMEZONE_OFFSET_MS;
+        const serverNow = new Date(serverNowMs);
 
-        // 获取当前是星期几
-        const currentDay = now.getDay();
+        const currentDay = serverNow.getUTCDay();
+        const daysUntilMonday = (1 - currentDay + 7) % 7;
 
-        // 计算距离下周一还有几天
-        let daysUntilMonday = 1 - currentDay;
-        if (daysUntilMonday <= 0) {
-            daysUntilMonday += 7;
+        let targetServerMs = Date.UTC(
+            serverNow.getUTCFullYear(),
+            serverNow.getUTCMonth(),
+            serverNow.getUTCDate() + daysUntilMonday,
+            4, 0, 0, 0
+        );
+
+        // 如果本周一 04:00 已经过了，才进入下一周
+        if (targetServerMs <= serverNowMs) {
+            targetServerMs += 7 * 24 * 60 * 60 * 1000;
         }
 
-        // 创建下周一4点的日期对象
-        const nextMonday4AM = new Date(now);
-        nextMonday4AM.setDate(now.getDate() + daysUntilMonday);
-        nextMonday4AM.setHours(4, 0, 0, 0);
-
-        return nextMonday4AM.toISOString();
+        return new Date(targetServerMs - SERVER_TIMEZONE_OFFSET_MS).toISOString();
     }
 
-    // 返回下月1号四点的时间戳
+    // 返回“下一次每月 1 日 04:00（UTC+8）”的时间戳。
+    // 1 日 04:00 前运行时，目标应是“当天 04:00”。
     function getNextMonthFirst4AMISO() {
-        const now = new Date();
+        const nowMs = Date.now();
+        const serverNowMs = nowMs + SERVER_TIMEZONE_OFFSET_MS;
+        const serverNow = new Date(serverNowMs);
 
-        // 获取当前月份并加一个月
-        let nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 4, 0, 0, 0);
+        let targetServerMs = Date.UTC(
+            serverNow.getUTCFullYear(),
+            serverNow.getUTCMonth(),
+            1, 4, 0, 0, 0
+        );
 
-        return nextMonth.toISOString();
+        if (targetServerMs <= serverNowMs) {
+            targetServerMs = Date.UTC(
+                serverNow.getUTCFullYear(),
+                serverNow.getUTCMonth() + 1,
+                1, 4, 0, 0, 0
+            );
+        }
+
+        return new Date(targetServerMs - SERVER_TIMEZONE_OFFSET_MS).toISOString();
     }
 
     // 复用宿主无日志读取接口。仅明确NotFound是首次运行，其余I/O错误不得当作空CD。
@@ -1093,12 +1114,15 @@
                 const lines = content.split('\n');
 
                 for (const line of lines) {
-                    if (line.trim()) {
-                        const [name, timestamp] = line.split('::');
-                        if (!name || !timestamp || !Number.isFinite(new Date(timestamp).getTime()))
-                            throw codedError('CD_RECORD_INVALID', 'CD记录格式损坏，需要复核');
-                        records[name] = timestamp;
-                    }
+                    const cleanLine = line.trim();
+                    if (!cleanLine) continue;
+                    const separatorIndex = cleanLine.indexOf('::');
+                    if (separatorIndex < 0) throw codedError('CD_RECORD_INVALID', 'CD记录格式损坏，需要复核');
+                    const name = cleanLine.slice(0, separatorIndex).trim();
+                    const timestamp = cleanLine.slice(separatorIndex + 2).trim();
+                    if (!name || !timestamp) throw codedError('CD_RECORD_INVALID', 'CD记录格式损坏，需要复核');
+                    parseCDTimestamp(timestamp);
+                    records[name] = timestamp;
                 }
 
                 // 迁移旧版本共用的“质变仪&爱可菲”CD记录。
@@ -1153,18 +1177,39 @@
         }
     }
 
+    function parseCDTimestamp(value) {
+        const text = String(value).trim();
+        const timestamp = /^\d+$/.test(text) ? Number(text) : Date.parse(text);
+        if (!text || !Number.isFinite(timestamp) || !Number.isFinite(new Date(timestamp).getTime()))
+            throw codedError('CD_RECORD_INVALID', 'CD记录时间损坏，需要复核');
+        return timestamp;
+    }
+
     // 检查路线是否可执行（CD是否已刷新）
     function isRouteAvailable(routeName, cdRecords) {
-        const now = new Date();
-
         // 如果记录中没有该路线，说明是第一次执行，可以执行
         if (!cdRecords[routeName]) {
             return true;
         }
 
-        // 检查CD时间是否已过
-        const cdTime = new Date(cdRecords[routeName]);
-        return now >= cdTime;
+        const rawTimestamp = String(cdRecords[routeName]).trim();
+
+        // 兼容 ISO 时间字符串，也兼容以后可能改成的毫秒时间戳。
+        const cdTimeMs = parseCDTimestamp(rawTimestamp);
+
+        const nowMs = Date.now();
+        if (nowMs >= cdTimeMs) {
+            log.info(`${routeName}CD已到期，允许执行`);
+            return true;
+        }
+
+        const remainingMinutes = Math.ceil((cdTimeMs - nowMs) / 60000);
+        const displayTime = new Date(cdTimeMs + SERVER_TIMEZONE_OFFSET_MS)
+            .toISOString()
+            .replace('T', ' ')
+            .slice(0, 19);
+        log.info(`${routeName}下次刷新：${displayTime} (UTC+8)，剩余约${remainingMinutes}分钟`);
+        return false;
     }
 
     // 自动战斗函数
