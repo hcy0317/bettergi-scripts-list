@@ -1069,7 +1069,11 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 state.cancel = true;
                 throw error;
             }
-            failedRoutes.add(Path.fullPath);
+            // 只采纳宿主确认的异常类别，并仅对激活目录使用用户允许的跳过政策。
+            // 标记页不证明已开放或已激活；仍须先恢复主界面，也绝不登记CD。
+            const unavailableActivation = /[\\/]激活[\\/]/.test(Path.fullPath) &&
+                String(error.message || '').startsWith('[BGI_PATH_TARGET_UNAVAILABLE]');
+            if (!unavailableActivation) failedRoutes.add(Path.fullPath);
             success = false;
             if (state.cancel) {
                 throw error;
@@ -1081,7 +1085,9 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 log.error(`路线失败后返回主界面失败，停止剩余路线：${recoveryError.message}`);
                 throw recoveryError;
             }
-            log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
+            log.warn(unavailableActivation
+                ? `路线 ${Path.fileName} 跳过（TARGET_UNAVAILABLE），未完成激活且不登记冷却，继续下一条`
+                : `路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
             continue;
         }
         if (pathRes != null && typeof pathRes.success === 'boolean') {
@@ -1190,7 +1196,7 @@ async function parsePathing(pathFilePath) {
 //在调用地图追踪后伪造该地图追踪结束运行的日志信息，如 await fakeLog(`地图追踪.json`, false, false, 0);
 //如此便可以在js运行过程中伪造地图追踪的日志信息，可以在日志分析等中查看
 
-async function fakeLog(name, isJs, isStart, duration) {
+async function fakeLog(name, isJs, isStart, duration, outcome = "未确认") {
     await sleep(10);
     const currentTime = Date.now();
     // 参数检查
@@ -1242,7 +1248,7 @@ async function fakeLog(name, isJs, isStart, duration) {
         // 处理 isJs = true 且 isStart = false 的情况
         const logMessage = `正在伪造js结束的日志记录\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
-            `→ 脚本执行结束: "${name}", 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
+            `→ 脚本执行结束: "${name}", 结果: ${outcome}, 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
             `------------------------------`;
         log.debug(logMessage);
@@ -1260,7 +1266,7 @@ async function fakeLog(name, isJs, isStart, duration) {
         // 处理 isJs = false 且 isStart = false 的情况
         const logMessage = `正在伪造地图追踪结束的日志记录\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
-            `→ 脚本执行结束: "${name}", 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
+            `→ 脚本执行结束: "${name}", 结果: ${outcome}, 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
             `------------------------------`;
         log.debug(logMessage);
@@ -1282,17 +1288,21 @@ async function runPath(fullPath, targetItemPath = null) {
 
     /* ---------- 主任务 ---------- */
     const pathingTask = (async () => {
+        const startedAt = Date.now();
+        let outcome = "失败";
         try {
             log.info(`开始执行路线: ${fullPath}`);
-            await fakeLog(fullPath, false, true, 0);
+            try { await fakeLog(fullPath, false, true, 0); } catch { /* 诊断不改变路线结果。 */ }
             const runResult = await pathingScript.runFile(fullPath);
-            await fakeLog(fullPath, false, false, 0);
+            outcome = runResult?.success === true ? "完成" : "未确认";
             return runResult;
         } catch (error) {
             log.error(`执行路线 ${fullPath} 时发生错误：${error.message}`);
             throw error;
         } finally {
             state.running = false;
+            try { await fakeLog(fullPath, false, false, Math.max(0, Date.now() - startedAt), outcome); }
+            catch { /* 诊断异常不能覆盖原始路径异常或成功结果。 */ }
         }
     })();
 
@@ -1323,6 +1333,13 @@ async function runPath(fullPath, targetItemPath = null) {
 
     /* ---------- 并发等待 ---------- */
     const [pathingResult, pickupResult, recoveryResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+    // 目标不可用不能掩盖伴随任务的独立故障；这种情况不能升级为合法跳过。
+    if (pathingResult.status === 'rejected' &&
+        String(pathingResult.reason?.message || '').startsWith('[BGI_PATH_TARGET_UNAVAILABLE]')) {
+        for (const result of [pickupResult, recoveryResult]) {
+            if (result.status === 'rejected') throw result.reason;
+        }
+    }
     for (const result of [pathingResult, pickupResult, recoveryResult]) {
         if (result.status === "rejected") throw result.reason;
     }
