@@ -1069,7 +1069,11 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 state.cancel = true;
                 throw error;
             }
-            failedRoutes.add(Path.fullPath);
+            // 只采纳宿主确认的异常类别，并仅对激活目录使用用户允许的跳过政策。
+            // 标记页不证明已开放或已激活；仍须先恢复主界面，也绝不登记CD。
+            const unavailableActivation = /[\\/]激活[\\/]/.test(Path.fullPath) &&
+                String(error.message || '').startsWith('[BGI_PATH_TARGET_UNAVAILABLE]');
+            if (!unavailableActivation) failedRoutes.add(Path.fullPath);
             success = false;
             if (state.cancel) {
                 throw error;
@@ -1081,7 +1085,9 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 log.error(`路线失败后返回主界面失败，停止剩余路线：${recoveryError.message}`);
                 throw recoveryError;
             }
-            log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
+            log.warn(unavailableActivation
+                ? `路线 ${Path.fileName} 跳过（TARGET_UNAVAILABLE），未完成激活且不登记冷却，继续下一条`
+                : `路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
             continue;
         }
         if (pathRes != null && typeof pathRes.success === 'boolean') {
@@ -1323,6 +1329,13 @@ async function runPath(fullPath, targetItemPath = null) {
 
     /* ---------- 并发等待 ---------- */
     const [pathingResult, pickupResult, recoveryResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+    // 目标不可用不能掩盖伴随任务的独立故障；这种情况不能升级为合法跳过。
+    if (pathingResult.status === 'rejected' &&
+        String(pathingResult.reason?.message || '').startsWith('[BGI_PATH_TARGET_UNAVAILABLE]')) {
+        for (const result of [pickupResult, recoveryResult]) {
+            if (result.status === 'rejected') throw result.reason;
+        }
+    }
     for (const result of [pathingResult, pickupResult, recoveryResult]) {
         if (result.status === "rejected") throw result.reason;
     }
