@@ -88,7 +88,7 @@
       "preserveSettingDefaults": [
         "accountName"
       ],
-      "revision": 2,
+      "revision": 3,
       "requiredMarkers": [
         {
           "file": "main.js",

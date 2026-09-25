@@ -757,12 +757,15 @@ async function switchPartyIfNeeded(partyName) {
         if (!await genshin.switchParty(partyName)) {
             log.info("切换队伍失败，前往七天神像重试");
             await genshin.tpToStatueOfTheSeven();
-            await genshin.switchParty(partyName);
+            if (!await genshin.switchParty(partyName)) {
+                throw new Error(`队伍 ${partyName} 切换仍未确认，停止本批路线`);
+            }
         }
-    } catch {
+    } catch (error) {
         log.error("队伍切换失败，可能处于联机模式或其他不可切换状态");
         notification.error(`队伍切换失败，可能处于联机模式或其他不可切换状态`);
-        await genshin.returnMainUi();
+        // 恢复归宿主失败交接持有；这里不能吞异常并让调用方缓存成功队伍。
+        throw error;
     }
 }
 
@@ -996,6 +999,13 @@ async function runEndingAndExtraPath() {
 }
 
 async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "") {
+    // 只绑定已证实的炮台准备链，不能从目录名推断其它路线依赖。
+    const normalizePath = path => String(path).replace(/\\/g, '/').replace(/^\.\//, '');
+    const cannonRoot = 'assets/ArtifactsPath/额外/所有额外';
+    const cannonRoute = `${cannonRoot}/执行/01【额外】稻妻-踏鞴砂大炮点5.json`;
+    const cannonPreparation = ['000【复位程序】稻妻踏鞴砂大炮点.json',
+        '001【激活程序】稻妻大炮1.json', '001【激活程序】稻妻大炮2.json']
+        .map(name => `${cannonRoot}/准备/${name}`);
     if (state.cancel) return;
     if (folderFilePath === "") {
         return;
@@ -1021,9 +1031,19 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
         const Path = Paths[i];
         let success = true;
         // 如果 CDInfo 数组中已存在该文件名，则跳过
-        if (CDInfo.includes(Path.fullPath)) {
+        if (CDInfo.some(path => normalizePath(path) === normalizePath(Path.fullPath))) {
             log.info(`路线${Path.fullPath}今日已运行，跳过`);
             continue;
+        }
+        if (normalizePath(Path.fullPath) === cannonRoute) {
+            const completed = new Set(CDInfo.map(normalizePath));
+            const failed = new Set([...failedRoutes].map(normalizePath));
+            const missing = cannonPreparation.filter(path => !completed.has(path) || failed.has(path));
+            if (missing.length) {
+                failedRoutes.add(Path.fullPath);
+                log.warn(`PREREQUISITE_BLOCKED ${Path.fullPath}：准备未确认成功：${missing.join('、')}；不执行、不登记冷却，独立路线继续`);
+                continue;
+            }
         }
         if (PartyName != state.currentParty && PartyName) {
             //如果与当前队伍不同，尝试切换队伍，并更新队伍
@@ -1131,7 +1151,9 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
         }
 
         if (!skiprecord) {
-            failedRoutes.delete(Path.fullPath);
+            for (const failed of failedRoutes) {
+                if (normalizePath(failed) === normalizePath(Path.fullPath)) failedRoutes.delete(failed);
+            }
             CDInfo = [...new Set([...CDInfo, Path.fullPath])];
             await writeCDInfo(accountName);
         }
