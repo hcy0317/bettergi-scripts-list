@@ -8,6 +8,13 @@ import { standardizeCommissionName } from "./commission-standardizer.js";
 import { isCancellationError } from "../utils/error-utils.js";
 import { resolveCommissionNameOcrRegions } from "./commission-scanner.js";
 
+let evidenceSequence = 0;
+function evidence(request, phase, detail) {
+    try {
+        if (typeof requestEvidenceWindow === "function") requestEvidenceWindow(request, phase, detail);
+    } catch { /* 诊断不可覆盖业务结果、取消或原异常。 */ }
+}
+
 /**
  * 检查指定委托是否已完成
  * 通过遍历4个委托位置的OCR识别，匹配委托名后检测其完成状态
@@ -15,6 +22,8 @@ import { resolveCommissionNameOcrRegions } from "./commission-scanner.js";
  * @returns {Promise<boolean>}
  */
 export async function isCompleted(commissionName) {
+    const evidenceRequest = `commission-recheck:${++evidenceSequence}:${commissionName}`;
+    evidence(evidenceRequest, "commission-before", commissionName);
     try {
         const enterSuccess = await enterCommissionScreen();
         if (!enterSuccess) {
@@ -33,6 +42,7 @@ export async function isCompleted(commissionName) {
             if (standardizedName === commissionName) {
                 log.debug("找到委托 {name}，检测完成状态", commissionName);
                 const iconStatus = await detectCommissionStatusByImage(i);
+                evidence(evidenceRequest, "commission-result", `name=${commissionName}; status=${iconStatus}; index=${i}`);
                 return iconStatus === COMMISSION_STATUS.COMPLETED;
             }
             await sleep(1);
@@ -45,6 +55,7 @@ export async function isCompleted(commissionName) {
         log.error("检查委托完成状态失败: {error}", error.message);
         return false;
     } finally {
+        evidence(evidenceRequest, "commission-exit", commissionName);
         try {
             await genshin.returnMainUi();
         } catch (exitError) {
