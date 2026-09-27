@@ -283,7 +283,7 @@ class Domain extends Base {
         partyName: undefined,//队伍名称
         sundaySelectedValue: 1,//周日|限时选择的值，默认为1
         domainRoundNum: 0,//副本轮数，默认为0
-    }) {
+    }, executionContext = {}) {
         Log.info(`{0}`, "开始执行秘境任务")
         Log.warn(`{0}`, "非体力耗尽情况下(受本体限制),等待退出秘境时间较长")
         Log.debug(`Object:{0}`,JSON.stringify(autoDomain))
@@ -338,11 +338,17 @@ class Domain extends Base {
         //   fragileResinUseCount: number;
         await sleep(1000)
 
-        const currentPhysical = await Physical.countAllResin()
+        const currentPhysical = executionContext.resinSnapshot ?? await Physical.countAllResin()
         config.user.physical.currentJson = currentPhysical;
         config.user.physical.current = currentPhysical.originalResinCount;
 
         const physical = config.user.physical
+        const rawResinCounts = new Map([
+            ["原粹树脂", currentPhysical.originalResinCount],
+            ["浓缩树脂", currentPhysical.condensedResinCount],
+            ["须臾树脂", currentPhysical.transientResinCount],
+            ["脆弱树脂", currentPhysical.fragileResinCount],
+        ])
         const resinAvailableCounts = new Map([
             ["原粹树脂", Number(currentPhysical.originalResinCount) >= physical.min ? 1 : 0],
             ["浓缩树脂", Number(currentPhysical.condensedResinCount) || 0],
@@ -353,6 +359,12 @@ class Domain extends Base {
             normalizeResinUseCount(item) > 0
             && (resinAvailableCounts.get(item?.name?.trim()) ?? 0) > 0)
         if (domainParam.SpecifyResinUse && !hasUsableSelectedResin) {
+            const hasUnknownSelectedResin = physical_domain.some(item => {
+                const count = rawResinCounts.get(item?.name?.trim());
+                return normalizeResinUseCount(item) > 0
+                    && (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0);
+            });
+            if (hasUnknownSelectedResin) throw new Error("已启用的树脂数量未确认，不能判定库存不足");
             Log.warn(`已启用的树脂均不足，本轮不进入秘境`)
             return {}
         }
