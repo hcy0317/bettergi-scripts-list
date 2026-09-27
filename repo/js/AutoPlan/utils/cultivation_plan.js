@@ -122,7 +122,7 @@ async function scanResinSnapshot() {
         };
         if (Object.values(normalized).some(value => value < 0)) {
             log.warn("[计划驱动] 树脂快照含未知值，不提交伪零库存，保留原生预检：{0}", JSON.stringify(normalized));
-            return null;
+            return normalized;
         }
         log.info("[计划驱动] 树脂快照：原粹={0}，浓缩={1}，须臾={2}，脆弱={3}",
             normalized.originalResinCount,
@@ -132,14 +132,14 @@ async function scanResinSnapshot() {
         return normalized;
     } catch (error) {
         if (isTerminalAutomationError(error)) throw error;
-        log.warn("[计划驱动] 树脂快照识别失败，保留 AutoDomain 自身预检：{0}",
+        log.warn("[计划驱动] 树脂快照识别失败，本次行动保留未知且不重复扫描：{0}",
             error?.message ?? String(error));
-        return null;
+        return {originalResinCount: -1, condensedResinCount: -1, transientResinCount: -1, fragileResinCount: -1};
     }
 }
 
 function resinSnapshotQuery(snapshot) {
-    if (!snapshot) return "";
+    if (!snapshot || Object.values(snapshot).some(value => value < 0)) return "";
     return `&originalResinCount=${encodeURIComponent(snapshot.originalResinCount)}`
         + `&condensedResinCount=${encodeURIComponent(snapshot.condensedResinCount)}`
         + `&transientResinCount=${encodeURIComponent(snapshot.transientResinCount)}`
@@ -268,7 +268,7 @@ async function reconcileInventoryCore(config, detail = {}) {
     return response.status === "REPLANNING";
 }
 
-async function executeAction(baseUrl, action, executorId, token) {
+async function executeAction(baseUrl, action, executorId, token, resinSnapshot) {
     const plan = action.plan;
     const handler = plan ? taskHandlerMap[plan.runType] : null;
     if (!handler) throw new Error(`计划器发放了不支持的行动类型: ${plan?.runType}`);
@@ -281,7 +281,7 @@ async function executeAction(baseUrl, action, executorId, token) {
     let rewards = {};
     let rewardReportAvailable = false;
     try {
-        const nativeRewards = await handler.run(plan[handler.target]);
+        const nativeRewards = await handler.run(plan[handler.target], {resinSnapshot});
         rewardReportAvailable = nativeRewards != null;
         rewards = toPlainRewards(nativeRewards);
         log.info(`[计划驱动] 实际奖励：{0}`, JSON.stringify(rewards));
@@ -500,6 +500,7 @@ async function runPlanCore(config) {
     }
     let resinSnapshot = null;
     async function claimNextAction() {
+        resinSnapshot = null;
         const claimUrl = `${baseUrl}/execution/next-action?uid=${encodeURIComponent(uid)}`
             + `&executorId=${encodeURIComponent(executorId)}`;
         let action = await requestJson("POST", claimUrl + "&prepareOnly=true"
@@ -571,11 +572,10 @@ async function runPlanCore(config) {
             if (!await reconcileInventoryCore(config)) return outcome("NEEDS_RECONCILE", "POST_CRAFT_INVENTORY");
             continue;
         }
+        const actionResinSnapshot = resinSnapshot;
+        resinSnapshot = null;
         const executionResult = await executeAction(
-                baseUrl, action, executorId, config.bgi_tools.token);
-            if (action.actionType === "DOMAIN" || action.actionType === "WORLD_BOSS") {
-                resinSnapshot = null;
-            }
+                baseUrl, action, executorId, config.bgi_tools.token, actionResinSnapshot);
             if (!executionResult.shouldContinue) return outcome(executionResult.status, executionResult.message);
         }
     }

@@ -35,12 +35,14 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         keyPress: async key => { events.push("key:" + key); }, click() {},
         Pen: class {}, Color: { Red: "red", RoyalBlue: "blue" },
         AutoBossParam: class {}, CountInventoryItemParam: class {},
+        AutoDomainParam: class { SetResinPriorityList() {} },
         GridScreenName: { CharacterDevelopmentItems: "CharacterDevelopmentItems" },
         ItemIconRecognitionMode: { Item: "Item" },
         captureGameRegion: () => ({ width: 1920, height: 1080,
             find: imageResult, findMulti: () => resinVisible ? [{ text: "0/200" }] : [], dispose() {} }),
         genshin: {
             returnMainUi: restoreMain, ReturnMainUi: restoreMain, setBigMapZoomLevel: async () => {},
+            exitDomain: async () => { events.push("exit-domain"); },
             tpToStatueOfTheSeven: async () => { events.push("statue"); },
             GoToCraftingBench: async country => { events.push("bench"); if (bench) await bench(country); },
             CraftMaterial: async (name, quantity) => {
@@ -54,6 +56,7 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         file: { ReadImageMatSync: readImage, readImageMatSync: readImage },
         SoloTask: class { constructor(name, param) { this.name = name; this.param = param; } },
         dispatcher: {
+            async RunAutoDomainTask() { events.push("domain"); return {"霜仙花": 1}; },
             async RunAutoBossTask() { events.push("boss"); return boss ? boss() : { "蕈王钩喙": 1 }; },
             async RunCountInventoryItemTask(param) { scans.push({ single: param.ItemName }); return 10; },
             async runTask(task) {
@@ -97,7 +100,8 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
     return { logs, scans, submissions, events, claims, outcomes,
         reconcile: () => entry.namespace.runCultivationInventoryReconcile(config()),
         run: () => entry.namespace.runPlanDrivenCultivation(config()),
-        physical: modules.get(path.join(root, "utils/physical.js")).namespace.Physical };
+        physical: modules.get(path.join(root, "utils/physical.js")).namespace.Physical,
+        handlers: modules.get(path.join(root, "utils/load_check_run.js")).namespace.taskHandlerMap };
 }
 
 test("managed BUSY cannot be reported as a completed script", async () => {
@@ -222,12 +226,115 @@ test("missing resin icons stay unknown and do not send a false zero-resin snapsh
 
 test("an explicitly recognized zero resin count remains zero", async () => {
     const runtime = await createRuntime({ resinVisible: true,
+        scan: () => ({ "须臾树脂": 0, "脆弱树脂": 0 }),
         nextActions: [{status: "NEEDS_RESIN_SNAPSHOT"}, {status: "WAITING"}] });
     await runtime.run();
     assert.equal(runtime.claims.length, 2);
     assert.doesNotMatch(runtime.claims[0], /originalResinCount/);
     assert.match(runtime.claims[1], /originalResinCount=0/, runtime.logs.filter(line => line.includes("树脂快照")).join("\n"));
     assert.match(runtime.claims[1], /condensedResinCount=0/);
+});
+
+test("resin snapshot reads consumables from the inventory, never the map replenishment pane", async () => {
+    const runtime = await createRuntime({ scan: () => ({ "须臾树脂": 2, "脆弱树脂": 37 }) });
+    const physical = runtime.physical;
+    physical.countOriginalResin = async () => { throw new Error("obsolete map OCR"); };
+    physical.countOriginalResinBackup = async () => 120;
+    physical.countCondensedResin = async () => 3;
+    physical.openReplenishResinUi = async () => { throw new Error("wrong page"); };
+    const snapshot = await physical.countAllResin();
+    assert.deepEqual(JSON.parse(JSON.stringify(snapshot)), {
+        originalResinCount: 120, condensedResinCount: 3,
+        transientResinCount: 2, fragileResinCount: 37,
+    });
+    assert.equal(runtime.scans.length, 1);
+    assert.equal(runtime.scans[0].gridScreenName, "PreciousItems");
+    assert.deepEqual(Array.from(runtime.scans[0].itemNames), ["须臾树脂", "脆弱树脂"]);
+    assert.equal(runtime.scans[0].iconRecognitionMode, "Item");
+});
+
+test("missing or invalid inventory resin quantities remain unknown", async () => {
+    const runtime = await createRuntime({ scan: () => ({ "脆弱树脂": -2 }) });
+    runtime.physical.countOriginalResinBackup = async () => 120;
+    runtime.physical.countCondensedResin = async () => 3;
+    const snapshot = await runtime.physical.countAllResin();
+    assert.equal(snapshot.transientResinCount, -1);
+    assert.equal(snapshot.fragileResinCount, -1);
+});
+
+test("verified native inventory evidence carries confirmed absence without inventing missing zeroes", async () => {
+    for (const coverageComplete of [true, false]) {
+        const runtime = await createRuntime({scan: () => ({schema: "bgi.inventory-count.v1",
+            counts: {"脆弱树脂": 38, "须臾树脂": coverageComplete ? 0 : -1}, coverageComplete,
+            reason: coverageComplete ? "verified-top-to-bottom" : "page-overlap-not-unique"})});
+        runtime.physical.countOriginalResinBackup = async () => 120;
+        runtime.physical.countCondensedResin = async () => 3;
+        const result = await runtime.physical.countAllResin();
+        assert.equal(result.fragileResinCount, 38);
+        assert.equal(result.transientResinCount, coverageComplete ? 0 : -1);
+        assert.equal(runtime.scans[0].includeScanEvidence, true);
+    }
+});
+
+test("a resin snapshot belongs only to the immediately claimed action", async () => {
+    const action = { status: "ACTION", actionType: "DOMAIN", actionId: "domain-1", revision: 1,
+        materialName: "霜仙花", plan: { runType: "秘境", autoDomain: {} } };
+    const runtime = await createRuntime({nextActions: [
+        {status: "NEEDS_RESIN_SNAPSHOT"}, action, {...action, actionId: "domain-2"}, {status: "DONE"},
+    ]});
+    const snapshot = {originalResinCount: 120, condensedResinCount: 3, transientResinCount: 2, fragileResinCount: 37};
+    let scans = 0;
+    runtime.physical.countAllResin = async () => { scans++; return snapshot; };
+    const received = [];
+    runtime.handlers["秘境"].run = async (_, context) => { received.push(context); return {"霜仙花": 1}; };
+    await runtime.run();
+    assert.equal(scans, 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(received[0].resinSnapshot)), snapshot);
+    assert.equal(received[1].resinSnapshot, null);
+    assert.doesNotMatch(runtime.claims[2], /originalResinCount/);
+});
+
+test("the real domain handler consumes a provided snapshot without another scan", async () => {
+    const runtime = await createRuntime();
+    runtime.physical.countAllResin = async () => { throw new Error("duplicate scan"); };
+    await runtime.handlers["秘境"].run({}, {resinSnapshot: {
+        originalResinCount: 120, condensedResinCount: 0, transientResinCount: -1, fragileResinCount: -1,
+    }});
+    assert.equal(runtime.events.filter(value => value === "domain").length, 1);
+});
+
+test("unknown selected resin cannot be reported as insufficient inventory", async () => {
+    const runtime = await createRuntime();
+    await assert.rejects(runtime.handlers["秘境"].run({}, {resinSnapshot: {
+        originalResinCount: -1, condensedResinCount: 0, transientResinCount: -1, fragileResinCount: -1,
+    }}), /树脂数量未确认/);
+    assert(!runtime.events.includes("domain"));
+});
+
+test("an ordinary resin scan failure is not immediately retried by the claimed domain", async () => {
+    const runtime = await createRuntime({nextActions: [
+        {status: "NEEDS_RESIN_SNAPSHOT"},
+        {status: "ACTION", actionType: "DOMAIN", actionId: "domain-failure", revision: 1,
+            materialName: "霜仙花", plan: {runType: "秘境", autoDomain: {}}},
+    ]});
+    let scans = 0;
+    runtime.physical.countAllResin = async () => { scans++; throw new Error("inventory interface unavailable"); };
+    await assert.rejects(runtime.run(), /树脂数量未确认/);
+    assert.equal(scans, 1);
+    assert.doesNotMatch(runtime.claims[1], /originalResinCount/);
+    assert(!runtime.events.includes("domain"));
+});
+
+test("inventory cancellation does not reopen the map or run final recovery", async () => {
+    let eventsBeforeCancellation;
+    const runtime = await createRuntime({resinVisible: true, scan: () => {
+        eventsBeforeCancellation = runtime.events.length;
+        throw new Error("OperationCanceledException");
+    }});
+    await assert.rejects(runtime.physical.countAllResin(), /OperationCanceledException/);
+    assert.equal(runtime.scans.length, 1);
+    assert.equal(runtime.events.filter(event => event === "key:M").length, 1);
+    assert.equal(runtime.events.length, eventsBeforeCancellation);
 });
 
 const bossAction = { status: "ACTION", actionType: "WORLD_BOSS", actionId: "boss-1", revision: 1,

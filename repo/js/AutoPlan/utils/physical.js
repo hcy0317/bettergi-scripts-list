@@ -409,42 +409,25 @@ export class Physical {
             // 打开地图界面统计原粹/浓缩树脂
             await Physical.openMap(); // 打开地图界面
             await sleep(CONFIG.UI_DELAY); // 等待界面加载
-            let tryPass = true; // 标记地图原粹树脂第一次尝试是否成功
-            try {
-                resinCounts.original = await Physical.countOriginalResin(false, false); // 统计原粹树脂数量
-            } catch (e) {
-                if (isTerminalTaskError(e)) throw e;
-                tryPass = false // 如果发生异常，标记第一次尝试失败
-            }
-            await sleep(CONFIG.UI_DELAY); // 等待界面加载
             Log.info("开始统计地图界面中的树脂"); // 记录开始统计的日志
-            if (!tryPass) {
-                // 如果第一次尝试失败，则切换到蒙德
-                await Physical.switchtoCountrySelection(CONFIG.COORDINATES.MONDSTADT.x, CONFIG.COORDINATES.MONDSTADT.y) // 切换到蒙德
-                resinCounts.original = await Physical.countOriginalResin(!tryPass); // 重新统计原粹树脂数量
-            }
+            resinCounts.original = await Physical.countOriginalResinBackup();
             resinCounts.condensed = await Physical.countCondensedResin(); // 统计浓缩树脂数量
-            // 须臾/脆弱树脂只显示在补充树脂页，不能用地图识别是否成功来决定是否打开该页面。
-            const replenishOpened = await Physical.openReplenishResinUi();
-            if (replenishOpened) {
-                await sleep(CONFIG.UI_DELAY); // 等待界面加载
-
-                // 点击避免选中效果影响统计
-                click(CONFIG.COORDINATES.AVOID_SELECTION.x, CONFIG.COORDINATES.AVOID_SELECTION.y); // 点击指定位置
-                await sleep(500); // 等待500毫秒
-
-                Log.info("开始统计补充树脂界面中的树脂"); // 记录开始统计的日志
-                resinCounts.transient = await Physical.countTransientResin(); // 统计须臾树脂数量
-                resinCounts.fragile = await Physical.countFragileResin(); // 统计脆弱树脂数量
-            } else {
-                Log.warn("未能打开补充树脂界面，须臾/脆弱树脂数量保持未知");
-            }
+            // 背包任务负责退出地图、打开贵重道具页和等待页面稳定，不进入补充/消费界面。
+            const inventory = await dispatcher.runTask(new SoloTask("CountInventoryItem", {
+                gridScreenName: "PreciousItems",
+                itemNames: ["须臾树脂", "脆弱树脂"],
+                iconRecognitionMode: "Item",
+                includeScanEvidence: true
+            }));
+            const counts = inventory?.schema === "bgi.inventory-count.v1" ? inventory.counts : inventory;
+            const readCount = name => {
+                const value = counts?.[name];
+                return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : -1;
+            };
+            resinCounts.transient = readCount("须臾树脂");
+            resinCounts.fragile = readCount("脆弱树脂");
             // 显示结果
             Physical.displayResults(resinCounts); // 显示统计结果
-
-            // 返回主界面
-            await genshin.returnMainUi(); // 返回主界面
-            await sleep(CONFIG.UI_DELAY); // 等待界面加载
 
             Log.info("树脂统计完成"); // 记录完成统计的日志
             return { // 返回包含各种树脂数量的对象
