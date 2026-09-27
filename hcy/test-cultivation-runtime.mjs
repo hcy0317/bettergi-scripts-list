@@ -262,6 +262,20 @@ test("missing or invalid inventory resin quantities remain unknown", async () =>
     assert.equal(snapshot.fragileResinCount, -1);
 });
 
+test("verified native inventory evidence carries confirmed absence without inventing missing zeroes", async () => {
+    for (const coverageComplete of [true, false]) {
+        const runtime = await createRuntime({scan: () => ({schema: "bgi.inventory-count.v1",
+            counts: {"脆弱树脂": 38, "须臾树脂": coverageComplete ? 0 : -1}, coverageComplete,
+            reason: coverageComplete ? "verified-top-to-bottom" : "page-overlap-not-unique"})});
+        runtime.physical.countOriginalResinBackup = async () => 120;
+        runtime.physical.countCondensedResin = async () => 3;
+        const result = await runtime.physical.countAllResin();
+        assert.equal(result.fragileResinCount, 38);
+        assert.equal(result.transientResinCount, coverageComplete ? 0 : -1);
+        assert.equal(runtime.scans[0].includeScanEvidence, true);
+    }
+});
+
 test("a resin snapshot belongs only to the immediately claimed action", async () => {
     const action = { status: "ACTION", actionType: "DOMAIN", actionId: "domain-1", revision: 1,
         materialName: "霜仙花", plan: { runType: "秘境", autoDomain: {} } };

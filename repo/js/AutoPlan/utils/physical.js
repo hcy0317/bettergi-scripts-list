@@ -416,10 +416,12 @@ export class Physical {
             const inventory = await dispatcher.runTask(new SoloTask("CountInventoryItem", {
                 gridScreenName: "PreciousItems",
                 itemNames: ["须臾树脂", "脆弱树脂"],
-                iconRecognitionMode: "Item"
+                iconRecognitionMode: "Item",
+                includeScanEvidence: true
             }));
+            const counts = inventory?.schema === "bgi.inventory-count.v1" ? inventory.counts : inventory;
             const readCount = name => {
-                const value = inventory?.[name];
+                const value = counts?.[name];
                 return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : -1;
             };
             resinCounts.transient = readCount("须臾树脂");
