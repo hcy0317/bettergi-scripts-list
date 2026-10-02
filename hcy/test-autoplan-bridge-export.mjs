@@ -15,6 +15,9 @@ test('the canonical bridge is exported byte-for-byte and verified without a seco
             .replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
         const target = path.join(root, 'bgi-tools/src/main/resources/cultivation/autoplan/cultivation_plan.js');
         assert.equal(await readFile(target, 'utf8'), source);
+        const distributedManifest = await readFile(new URL('../repo/js/AutoPlan/utils/bridge-source.json', import.meta.url), 'utf8');
+        assert.equal(distributedManifest, await readFile(path.join(path.dirname(target), 'bridge-source.json'), 'utf8'));
+        assert.equal(JSON.parse(distributedManifest).sha256, exported.sha256);
         assert.match(source, /\$\{name\}/);
         assert.equal((await exportAutoPlanBridge({toolsRoot: root, check: true})).sha256, exported.sha256);
         assert.equal((await exportAutoPlanBridge({toolsRoot: root})).changed, false);
@@ -23,6 +26,10 @@ test('the canonical bridge is exported byte-for-byte and verified without a seco
         assert.match(path.basename(root), /^bgi-bridge-export-/);
         await rm(root, {recursive: true, force: true});
     }
+});
+
+test('check mode cannot mutate the distributed source manifest', async () => {
+    await assert.rejects(exportAutoPlanBridge({check: true, writeSourceManifest: true}), /cannot write/);
 });
 
 test('resource validation rejects noncanonical bytes and unrelated vendor edits', async () => {

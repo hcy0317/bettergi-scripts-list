@@ -5,7 +5,7 @@
 在 Scripts 仓库执行：
 
 ```powershell
-node hcy/export-autoplan-bridge.mjs --tools-root <Tools源码根>
+node hcy/export-autoplan-bridge.mjs --tools-root <Tools源码根> --write-source-manifest
 node hcy/export-autoplan-bridge.mjs --tools-root <Tools源码根> --check
 node --experimental-vm-modules --test hcy/test-autoplan-bridge-export.mjs hcy/test-cultivation-runtime.mjs
 ```
@@ -15,3 +15,5 @@ node --experimental-vm-modules --test hcy/test-autoplan-bridge-export.mjs hcy/te
 Tools 将 `cultivation/autoplan` 资源原样打包，并在安装桥接前校验 `bridge-source.json`。已有安装标记属于另一个主源版本时，生成配置会拒绝覆盖或降级代码；正式部署必须成对更新 `utils/cultivation_plan.js` 和 `utils/bridge-source.json`。用户配置、库存和CD记录不属于桥接产物。
 
 LF 是产物合同的一部分。两个仓库的局部 `.gitattributes` 保证相关文件不被 checkout 转换成 CRLF；Maven 不得对该资源目录作变量插值。
+
+`repo/js/AutoPlan/utils/bridge-source.json` 随主脚本一起分发，不能只更新 JS 留下安装目录中的旧摘要。主源逻辑变更经审查后使用 `--write-source-manifest` 同步生成脚本侧清单与 Tools 固定资源；`--check` 只读检查三者一致，不自动修正或绕过摘要校验。

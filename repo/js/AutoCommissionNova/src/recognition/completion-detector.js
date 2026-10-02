@@ -42,7 +42,7 @@ export async function isCompleted(commissionName) {
             if (standardizedName === commissionName) {
                 log.debug("找到委托 {name}，检测完成状态", commissionName);
                 const iconStatus = await detectCommissionStatusByImage(i);
-                evidence(evidenceRequest, "commission-result", `name=${commissionName}; status=${iconStatus}; index=${i}`);
+                evidence(evidenceRequest, "commission-result", JSON.stringify({ completed: iconStatus === COMMISSION_STATUS.COMPLETED, index: i }));
                 return iconStatus === COMMISSION_STATUS.COMPLETED;
             }
             await sleep(1);

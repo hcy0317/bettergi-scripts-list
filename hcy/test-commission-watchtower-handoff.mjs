@@ -28,11 +28,22 @@ async function scenario({ complete = false, routeError = false, combatError = fa
         '../vision/index.js': { RO: {} },
         '../vision/ocr-utils.js': { bvPageOcrRegionText: () => complete ? '委托完成' : '' },
         './define-step.js': { defineStep: value => value },
-        '../utils/error-utils.js': { isCancellationError: error => error.message === 'cancelled' },
+        '../utils/error-utils.js': { isCancellationError: error => error.message === 'cancelled',
+            rethrowIfCancellation: error => { if (error.message === 'cancelled' || error.message.includes('BGI_COMBAT_UNCONFIRMED')) throw error; } },
         './commission-desc-utils.js': { readTrackedDescriptionText: () => { events.push('status'); return descriptions++ === 0 ? '丘丘人哨塔0/2' : '丘丘人哨塔2/2'; } }
     };
     const processor = new vm.SourceTextModule(fs.readFileSync(path.join(root, 'src/processors/basic-destroy-watchtower.js'), 'utf8'), { context });
     await processor.link(async spec => {
+        if (spec === '../utils/path-healing-recovery.js') {
+            const recovery = new vm.SourceTextModule(fs.readFileSync(path.join(root, 'src/utils/path-healing-recovery.js'), 'utf8'), { context });
+            await recovery.link(() => {
+                const exports = dependencies['../utils/error-utils.js'];
+                return new vm.SyntheticModule(Object.keys(exports), function () {
+                    for (const [key, value] of Object.entries(exports)) this.setExport(key, value);
+                }, { context });
+            });
+            return recovery;
+        }
         if (spec === '../utils/async-task-retirement.js') {
             const retirement = new vm.SourceTextModule(fs.readFileSync(path.join(root, 'src/utils/async-task-retirement.js'), 'utf8'), { context });
             await retirement.link(() => { throw Error('Unexpected retirement dependency'); });
