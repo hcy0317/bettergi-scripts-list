@@ -31,7 +31,8 @@ async function requirePlainPath(root, relative) {
 }
 
 /** 显式源码导出，不联网；已有vendor必须与其清单或显式adoption摘要匹配。 */
-export async function exportAutoPlanBridge({toolsRoot, check = false, adoptCurrent} = {}) {
+export async function exportAutoPlanBridge({toolsRoot, check = false, adoptCurrent, writeSourceManifest = false} = {}) {
+    if (check && writeSourceManifest) throw new Error('--check cannot write the source manifest');
     if (!toolsRoot) throw new Error('An explicit --tools-root is required');
     const requested = path.resolve(toolsRoot);
     if ((await lstat(requested)).isSymbolicLink()) throw new Error('Tools root cannot be a link');
@@ -58,19 +59,26 @@ export async function exportAutoPlanBridge({toolsRoot, check = false, adoptCurre
         throw new Error('Existing unpinned vendor requires --adopt-current with its exact canonical SHA256');
     }
     const manifest = JSON.stringify({schemaVersion: 1, repository, sourcePath, normalization: 'utf8-lf', sha256}, null, 2) + '\n';
+    const canonicalManifestPath = await requirePlainPath(path.dirname(sourceFile), 'bridge-source.json');
+    const canonicalManifest = await optionalRead(canonicalManifestPath);
+    const sourceManifestChanged = !canonicalManifest || !canonicalManifest.equals(Buffer.from(manifest, 'utf8'));
+    if (sourceManifestChanged && !writeSourceManifest)
+        throw new Error('Canonical script and source manifest differ; review the source change and export with --write-source-manifest');
     const changed = !before || !before.equals(Buffer.from(content, 'utf8'))
         || !beforeManifest || !beforeManifest.equals(Buffer.from(manifest, 'utf8'));
     if (check && changed) throw new Error('AutoPlan vendor is not the canonical export; regenerate it explicitly');
-    if (!check && changed) {
+    if (!check && (changed || sourceManifestChanged)) {
         await mkdir(path.dirname(target), {recursive: true});
         // 清单最后发布；中断时消费者校验失败，不会把半套资源当作有效桥接。
-        for (const [file, value] of [[target, content], [manifestPath, manifest]]) {
+        const writes = changed ? [[target, content], [manifestPath, manifest]] : [];
+        if (sourceManifestChanged) writes.push([canonicalManifestPath, manifest]);
+        for (const [file, value] of writes) {
             const temporary = file + `.export-${process.pid}.tmp`;
             await writeFile(temporary, value, {encoding: 'utf8', flag: 'wx'});
             await rename(temporary, file);
         }
     }
-    return {sha256, changed, target};
+    return {sha256, changed, sourceManifestChanged, target};
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
@@ -78,6 +86,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
     const args = process.argv.slice(2);
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--check') options.check = true;
+        else if (args[i] === '--write-source-manifest') options.writeSourceManifest = true;
         else if (args[i] === '--tools-root' && args[i + 1]) options.toolsRoot = args[++i];
         else if (args[i] === '--adopt-current' && args[i + 1]) options.adoptCurrent = args[++i];
         else throw new Error(`Unknown or incomplete argument: ${args[i]}`);
