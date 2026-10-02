@@ -28,6 +28,8 @@ jobs:
           hcy/test-artifact-completion.mjs
           hcy/test-artifact-route-confirmation.mjs
           hcy/test-auto-commission-errors.mjs
+          hcy/test-commission-healing-recovery.mjs
+          hcy/test-commission-watchtower-handoff.mjs
           hcy/test-autoplan-bridge-export.mjs
           hcy/test-autoplan-domain-exit.mjs
           hcy/test-autoplan-managed-compat.mjs

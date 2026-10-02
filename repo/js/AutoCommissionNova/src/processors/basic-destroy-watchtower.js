@@ -449,7 +449,7 @@ async function destroyAllWatchtowers(options, context) {
         if (options.navigation === NAVIGATION_PATH) {
             const fullPath = context.resolveResource(options.paths[processedCount]);
             log.info("使用路径追踪前往第 {count} 个哨塔: {path}", processedCount + 1, fullPath);
-            await pathingScript.runFile(fullPath);
+            await runCommissionPath(fullPath, context);
             log.info("已到达第 {count} 条路径终点，开始准备攻击哨塔", processedCount + 1);
         }
         log.info("开始处理第 {count} 个哨塔", processedCount + 1);
@@ -560,3 +560,4 @@ export default defineStep({
         }
     },
 });
+import { runCommissionPath } from "../utils/path-healing-recovery.js";

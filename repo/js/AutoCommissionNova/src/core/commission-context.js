@@ -60,6 +60,8 @@ export function createCommissionContext({ type, country, commissionName, locatio
         branchConditionMet: false,
         locationDetected: false,
         detectedPosition: null,
+        healingNavigationCheckpoint: null,
+        healingReplans: 0,
     };
 
     // 把子流程 step 数组 splice 到当前 step 之后，并为每个 sub-step 打上 _indexPath，
