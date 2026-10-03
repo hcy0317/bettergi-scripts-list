@@ -2,9 +2,10 @@
  * Basic流程匹配器模块
  * 负责扫描Basic委托子目录，读取 _path.json 获取目标坐标，计算距离并匹配最近的流程
  */
-import { calculateDistance, getCommissionTargetPosition } from "../navigation/index.js";
+import { calculateDistance, getCommissionTargetPosition, normalizePosition, findCommissionTarget } from "../navigation/index.js";
 import { buildProcessBasePath } from "../loaders/process-scope.js";
 import { parseLocationDir } from "../utils/location-dir.js";
+import { isCancellationError } from "../utils/error-utils.js";
 
 /**
  * 扫描指定目录下的所有子目录
@@ -24,6 +25,7 @@ function scanSubDirectories(dirPath) {
 
         return subDirs;
     } catch (error) {
+        if (isCancellationError(error)) throw error;
         log.warn("扫描目录失败: {path}, 错误: {error}", dirPath, error.message);
         return [];
     }
@@ -37,6 +39,20 @@ function scanSubDirectories(dirPath) {
  * @returns {Promise<{processPath: string, processDir: string, distance: number}|null>}
  */
 export async function findNearestBasicProcess(commissionName, location, commissionPosition, country = "蒙德") {
+    let position = normalizePosition(commissionPosition);
+    let failure = null;
+    for (let attempt = 0; !position && attempt < 2; attempt++) {
+        try { position = normalizePosition(await findCommissionTarget(commissionName)); }
+        catch (error) {
+            if (isCancellationError(error) || error.cleanupError) throw error;
+            failure = error;
+        }
+    }
+    if (!position) {
+        const error = new Error("commission-position-unavailable: " + commissionName);
+        error.cause = failure;
+        throw error;
+    }
     const baseDir = `${buildProcessBasePath(country, "BASIC")}/${commissionName}`;
     const subDirs = scanSubDirectories(baseDir);
 
@@ -59,7 +75,7 @@ export async function findNearestBasicProcess(commissionName, location, commissi
         try {
             const targetPos = await getCommissionTargetPosition(pathFile);
             if (targetPos) {
-                const distance = calculateDistance(commissionPosition, targetPos);
+                const distance = calculateDistance(position, targetPos);
 
                 if (distance < minDistance) {
                     minDistance = distance;
@@ -71,6 +87,7 @@ export async function findNearestBasicProcess(commissionName, location, commissi
                 }
             }
         } catch (error) {
+            if (isCancellationError(error)) throw error;
             log.warn("读取 _path.json 失败: {path}, 错误: {error}", pathFile, error.message);
         }
     }

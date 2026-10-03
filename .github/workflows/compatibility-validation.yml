@@ -40,6 +40,7 @@ jobs:
           hcy/test-purchase-account.mjs
       - name: Installed host and package contracts
         run: |
+          node --experimental-vm-modules hcy/test-commission-position.mjs
           node --experimental-vm-modules hcy/test-commission-live-compat.mjs
           node --experimental-vm-modules hcy/test-commission-music-flow.mjs
           node hcy/test-packages.mjs
