@@ -2,6 +2,7 @@
  * Basic委托执行模块
  * 采用流程步骤驱动方式执行Basic委托
  */
+import { isCancellationError } from "../utils/error-utils.js";
 import { COMMISSION_TYPE } from "../config/index.js";
 import { findNearestBasicProcess } from "./basic-process-matcher.js";
 import { loadBasicProcess } from "../loaders/index.js";
@@ -64,6 +65,7 @@ export async function executeBasicCommission(commission, stepRegistry, accountUi
             dispatcher.ClearAllTriggers();
         }
     } catch (error) {
+        if (isCancellationError(error) || String(error.message).startsWith("commission-position-unavailable")) throw error;
         log.error("执行Basic委托时出错: {error}", error.message);
         return { success: false, context: null };
     }

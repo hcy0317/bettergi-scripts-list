@@ -11,16 +11,17 @@ import { isCancellationError } from "../utils/error-utils.js";
  * @param {Object} point2 - 点2坐标 { X, Y } 或 { x, y }
  * @returns {number} 两点间距离，无效数据返回 Infinity
  */
+export function normalizePosition(point) {
+    if (!point || typeof point !== "object") return null;
+    const x = point.X ?? point.x;
+    const y = point.Y ?? point.y;
+    return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y)
+        ? { x, y } : null;
+}
+
 export function calculateDistance(point1, point2) {
-    if (!point1 || !point2) return Infinity;
-    const x1 = point1.X || point1.x;
-    const y1 = point1.Y || point1.y;
-    const x2 = point2.X || point2.x;
-    const y2 = point2.Y || point2.y;
-    if (typeof x1 !== "number" || typeof y1 !== "number" || typeof x2 !== "number" || typeof y2 !== "number") {
-        return Infinity;
-    }
-    return Math.sqrt(Math.pow(x1 - x2, 2) + Math.pow(y1 - y2, 2));
+    const first = normalizePosition(point1), second = normalizePosition(point2);
+    return first && second ? Math.hypot(first.x - second.x, first.y - second.y) : Infinity;
 }
 
 /**
@@ -46,7 +47,8 @@ export async function getPositionWithVoting() {
             await genshin.setBigMapZoomLevel(scale);
             await sleep(100);
             const position = genshin.getPositionFromBigMap();
-            positions.push(position);
+            const valid = normalizePosition(position);
+            if (valid) positions.push(valid);
         } catch (error) {
             if (isCancellationError(error)) { throw error; }
             log.debug('缩放:{0}, error:{1}', scale, error.message);
@@ -96,7 +98,7 @@ export async function getCommissionTargetPosition(scriptPath) {
             return null;
         }
         const lastPosition = pathData.positions[pathData.positions.length - 1];
-        if (!lastPosition.x || !lastPosition.y) {
+        if (!normalizePosition(lastPosition)) {
             log.warn("路径追踪文件 {path} 的最后一个路径点缺少坐标数据", scriptPath);
             return null;
         }
