@@ -67,7 +67,7 @@ export default defineStep({
             if (page.locator(RO.moonLightIcon).isExist()) {
                 log.info("识别到月光图标，按 T 触发");
                 keyPress("t");
-                await sleep(300);
+                await sleep(2000);
             }
 
             await sleep(CHECK_INTERVAL_MS);

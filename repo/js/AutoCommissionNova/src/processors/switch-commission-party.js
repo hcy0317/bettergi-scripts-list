@@ -2,7 +2,7 @@
  * 按当前委托配置切换战斗队伍或元素采集队伍。
  */
 import { loadPartyConfigForContext, resolvePartySelection } from "../loaders/party-config.js";
-import { switchPartyByName, switchPartyWithRoles } from "../core/commission-party-switcher.js";
+import { switchPartyByName, switchPartyWithRoles, prepareBattleVision } from "../core/commission-party-switcher.js";
 import { defineStep } from "./define-step.js";
 
 export default defineStep({
@@ -18,6 +18,10 @@ export default defineStep({
         const configBundle = loadPartyConfigForContext(context);
         const channel = step.data === "战斗" ? "battle" : "collect";
         const resolved = resolvePartySelection(configBundle, channel);
+        const finish = async () => {
+            if (channel === "battle") await prepareBattleVision(context);
+            return true;
+        };
 
         if (resolved.mode === "roles") {
             if (!resolved.customTeamName) {
@@ -29,18 +33,18 @@ export default defineStep({
             if (!switched) {
                 throw new Error(`${step.data}队伍角色重组失败: ${resolved.customTeamName}`);
             }
-            return true;
+            return finish();
         }
 
         const teamName = resolved.teamName;
         if (!teamName || teamName.trim() === "") {
             log.warn("{kind}队伍未配置队伍名称，跳过切换队伍", step.data);
-            return true;
+            return finish();
         }
 
         const success = await switchPartyByName(teamName);
         if (!success) throw new Error(`队伍切换失败: ${teamName}`);
         await sleep(300);
-        return true;
+        return finish();
     },
 });

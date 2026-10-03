@@ -3,8 +3,50 @@ import {Physical} from "./physical";
 
 function isTerminalAutomationError(error) {
     if (!error) return false;
-    return /BGI_COMBAT_UNCONFIRMED|OperationCanceledException|TaskCanceledException|NormalEndException|UserCancelled|取消|cancelled|canceled/i
+    if (typeof taskResult !== "undefined") taskResult.check();
+    return /BGI_COMBAT_UNCONFIRMED|BGI_TASK_CANCELLED|OperationCanceledException|TaskCanceledException|NormalEndException|UserCancelled/
         .test(String(error?.message ?? error) + " " + String(error?.name ?? ""));
+}
+
+function outcome(status, message = "") {
+    const code = String(status ?? "UNKNOWN");
+    const kind = code === "COMPLETED" ? "Completed"
+        : code === "NO_PLAN" || code === "NO_TARGETS" ? "Skipped"
+        : code === "BUSY" || code === "WAITING" || code === "STOPPED_NO_PROGRESS" ? "Deferred"
+        : "NeedsReconcile";
+    return {kind, reason: code + (message ? ":" + message : "")};
+}
+
+async function managedOutcome(work) {
+    if (typeof taskResult === "undefined" || typeof taskResult.report !== "function"
+        || typeof taskResult.requireExplicitOutcome !== "function" || typeof taskResult.check !== "function")
+        throw new Error("[BGI_TASK_OUTCOME_UNSUPPORTED] 当前BetterGI缺少受管任务结果协议，请先更新宿主");
+    taskResult.requireExplicitOutcome();
+    try {
+        taskResult.check();
+        const result = await work();
+        taskResult.check();
+        taskResult.report(result.kind, result.reason);
+        return result.value;
+    } catch (error) {
+        taskResult.check(); // 原生取消/战斗终止锁优先，不能被JS改写或清空。
+        const cancelled = /BGI_TASK_CANCELLED|OperationCanceledException|TaskCanceledException|NormalEndException|UserCancelled/
+            .test(String(error?.message ?? error) + " " + String(error?.name ?? ""));
+        taskResult.report(cancelled ? "Cancelled" : "Failed", String(error?.message ?? error));
+        throw error;
+    }
+}
+
+export async function runCultivationInventoryReconcile(config) {
+    return managedOutcome(async () => {
+        const detail = {};
+        const succeeded = await reconcileInventoryCore(config, detail);
+        return {...(detail.outcome ?? outcome(succeeded ? "COMPLETED" : "NEEDS_RECONCILE")), value: succeeded};
+    });
+}
+
+export async function runPlanDrivenCultivation(config) {
+    return managedOutcome(async () => ({...await runPlanCore(config), value: undefined}));
 }
 
 function apiHeaders(token) {
@@ -80,7 +122,7 @@ async function scanResinSnapshot() {
         };
         if (Object.values(normalized).some(value => value < 0)) {
             log.warn("[计划驱动] 树脂快照含未知值，不提交伪零库存，保留原生预检：{0}", JSON.stringify(normalized));
-            return null;
+            return normalized;
         }
         log.info("[计划驱动] 树脂快照：原粹={0}，浓缩={1}，须臾={2}，脆弱={3}",
             normalized.originalResinCount,
@@ -90,14 +132,14 @@ async function scanResinSnapshot() {
         return normalized;
     } catch (error) {
         if (isTerminalAutomationError(error)) throw error;
-        log.warn("[计划驱动] 树脂快照识别失败，保留 AutoDomain 自身预检：{0}",
+        log.warn("[计划驱动] 树脂快照识别失败，本次行动保留未知且不重复扫描：{0}",
             error?.message ?? String(error));
-        return null;
+        return {originalResinCount: -1, condensedResinCount: -1, transientResinCount: -1, fragileResinCount: -1};
     }
 }
 
 function resinSnapshotQuery(snapshot) {
-    if (!snapshot) return "";
+    if (!snapshot || Object.values(snapshot).some(value => value < 0)) return "";
     return `&originalResinCount=${encodeURIComponent(snapshot.originalResinCount)}`
         + `&condensedResinCount=${encodeURIComponent(snapshot.condensedResinCount)}`
         + `&transientResinCount=${encodeURIComponent(snapshot.transientResinCount)}`
@@ -184,7 +226,7 @@ async function reportResult(baseUrl, action, executorId, observedOwned, succeede
     }, token);
 }
 
-export async function runCultivationInventoryReconcile(config) {
+async function reconcileInventoryCore(config, detail = {}) {
     const baseUrl = cultivationApiBase(config.bgi_tools.api.httpPullJsonConfig);
     const uid = String(config.user.uid ?? "").trim();
     if (!uid) throw new Error("库存复核模式缺少 UID");
@@ -194,11 +236,13 @@ export async function runCultivationInventoryReconcile(config) {
             + `&executorId=${encodeURIComponent(executorId)}`,
         null, config.bgi_tools.token);
     if (targets?.status === "NO_TARGETS") {
+        detail.outcome = outcome("NO_TARGETS");
         log.info("[计划驱动] 当前没有需要组末复核的地方特产或怪物材料");
         return true;
     }
     // NEEDS_RECONCILE 在领取端是已取得的重试租约，在回写端则表示尚未闭合。
     if (targets?.status !== "ACTION" && targets?.status !== "NEEDS_RECONCILE") {
+        detail.outcome = outcome(targets?.status, targets?.message);
         log.warn("[计划驱动] 组末库存复核未取得可用租约：{0}，{1}", targets?.status, targets?.message);
         return false;
     }
@@ -220,10 +264,11 @@ export async function runCultivationInventoryReconcile(config) {
         },
         config.bgi_tools.token);
     log.info("[计划驱动] 组末库存回写完成：{0} 项，{1}", response.observedCount, response.message);
+    detail.outcome = outcome(response.status === "REPLANNING" ? "COMPLETED" : response.status, response.message);
     return response.status === "REPLANNING";
 }
 
-async function executeAction(baseUrl, action, executorId, token) {
+async function executeAction(baseUrl, action, executorId, token, resinSnapshot) {
     const plan = action.plan;
     const handler = plan ? taskHandlerMap[plan.runType] : null;
     if (!handler) throw new Error(`计划器发放了不支持的行动类型: ${plan?.runType}`);
@@ -236,7 +281,7 @@ async function executeAction(baseUrl, action, executorId, token) {
     let rewards = {};
     let rewardReportAvailable = false;
     try {
-        const nativeRewards = await handler.run(plan[handler.target]);
+        const nativeRewards = await handler.run(plan[handler.target], {resinSnapshot});
         rewardReportAvailable = nativeRewards != null;
         rewards = toPlainRewards(nativeRewards);
         log.info(`[计划驱动] 实际奖励：{0}`, JSON.stringify(rewards));
@@ -273,16 +318,16 @@ async function executeAction(baseUrl, action, executorId, token) {
     if (executionError) throw executionError;
     if (rewardReportAvailable && Object.keys(rewards).length === 0) {
         log.warn(`[计划驱动] 行动未产生奖励，重新领取以选择批量合成或安全停止`);
-        return result.status === "STOPPED_NO_PROGRESS";
+        return {shouldContinue: result.status === "STOPPED_NO_PROGRESS", status: result.status, message: result.message};
     }
-    return result.status === "REPLANNING";
+    return {shouldContinue: result.status === "REPLANNING", status: result.status, message: result.message};
 }
 
 async function executeCraftBatchAction(baseUrl, action, executorId, config) {
     const craftActions = Array.isArray(action.craftActions) ? action.craftActions : [];
     if (craftActions.length === 0) {
         log.error("[计划驱动] 批量合成行动没有可执行材料");
-        return {shouldContinue: false, shouldReconcile: false};
+        return {shouldContinue: false, shouldReconcile: false, status: "NEEDS_RECONCILE", message: "EMPTY_CRAFT_BATCH"};
     }
 
     const rewards = {};
@@ -360,26 +405,28 @@ async function executeCraftBatchAction(baseUrl, action, executorId, config) {
     log.info("[计划驱动] 批量合成回写状态：{0}，成功 {1}/{2} 项，{3}",
         result.status, Object.keys(rewards).length, craftActions.length, result.message);
     if (executionError) throw executionError;
-    return {shouldContinue: result.status === "REPLANNING", shouldReconcile: true};
+    return {shouldContinue: result.status === "REPLANNING", shouldReconcile: true, status: result.status, message: result.message};
 }
 
-async function runInventoryReconcileOnce(config, state, reason) {
-    if (state.attempted) {
-        log.warn("[计划驱动] 本轮已完成一次完整库存复核，不再重复检查：{0}", reason);
+async function runInventoryReconcileOnce(config, state, reason, rawCause) {
+    const cause = typeof rawCause === "string" && /^ACTION:[A-Za-z0-9_-]+$/.test(rawCause)
+        ? rawCause : "INITIAL";
+    if (state.attemptedCauses.has(cause)) {
+        log.warn("[计划驱动] 本原因已尝试完整库存复核，不再重复检查：{0}，{1}", cause, reason);
         return {performed: false, succeeded: true};
     }
-    state.attempted = true;
-    log.warn("[计划驱动] 本轮执行一次完整库存复核：{0}", reason);
+    state.attemptedCauses.add(cause);
+    log.warn("[计划驱动] 本原因执行一次完整库存复核：{0}，{1}", cause, reason);
     return {
         performed: true,
-        succeeded: await runCultivationInventoryReconcile(config),
+        succeeded: await reconcileInventoryCore(config),
     };
 }
 
 async function refreshCurrentOwned(config, phase) {
     log.warn("[计划驱动] {0}刷新当前拥有", phase);
     try {
-        const refreshed = await runCultivationInventoryReconcile(config);
+        const refreshed = await reconcileInventoryCore(config);
         if (!refreshed) {
             log.warn("[计划驱动] {0}库存刷新未闭合；保留上次可信库存，不把单个未知材料升级为配置组失败", phase);
             return false;
@@ -433,32 +480,41 @@ async function executeCraftAction(baseUrl, action, executorId, config) {
         rewards, config.bgi_tools.token);
     log.info(`[计划驱动] 合成回写状态：{0}，{1}`, result.status, result.message);
     if (executionError) throw executionError;
-    if (Object.keys(rewards).length === 0) return false;
-    return result.status === "REPLANNING";
+    if (Object.keys(rewards).length === 0) return {shouldContinue: false, status: "NEEDS_RECONCILE", message: "NO_CRAFT_REWARD"};
+    return {shouldContinue: result.status === "REPLANNING", status: result.status, message: result.message};
 }
 
-export async function runPlanDrivenCultivation(config) {
+async function runPlanCore(config) {
     const baseUrl = cultivationApiBase(config.bgi_tools.api.httpPullJsonConfig);
     const uid = String(config.user.uid ?? "").trim();
     if (!uid) throw new Error("计划驱动模式缺少 UID");
     const executorId = `autoplan-${uid}-${Date.now()}`;
     config.run.exclude_run_exception = false;
     config.run.loop_plan = false;
-    const inventoryReconcileState = {attempted: false};
+    const inventoryReconcileState = {attemptedCauses: new Set()};
     log.info(`[计划驱动] 已启用：合成按完整批次执行，其余任务每次领取一个行动`);
 
     const startRefreshCompleted = await refreshCurrentOwned(config, "计划开始前");
     if (!startRefreshCompleted) {
         log.warn("[计划驱动] 计划开始前库存存在未知项，继续使用上次可信库存；计划器可再请求一次有界复核");
     }
-    let resinSnapshot = await scanResinSnapshot();
-    let allowFinalRefresh = true;
-    try {
+    let resinSnapshot = null;
+    async function claimNextAction() {
+        resinSnapshot = null;
+        const claimUrl = `${baseUrl}/execution/next-action?uid=${encodeURIComponent(uid)}`
+            + `&executorId=${encodeURIComponent(executorId)}`;
+        let action = await requestJson("POST", claimUrl + "&prepareOnly=true"
+            + resinSnapshotQuery(resinSnapshot), {}, config.bgi_tools.token);
+        if (action.status === "NEEDS_RESIN_SNAPSHOT" || action.status === "READY_FOR_ACTION") {
+            if (action.status === "NEEDS_RESIN_SNAPSHOT") resinSnapshot = await scanResinSnapshot();
+            action = await requestJson("POST", claimUrl + resinSnapshotQuery(resinSnapshot), {}, config.bgi_tools.token);
+        }
+        // 旧服务可能忽略prepareOnly并已领取ACTION，必须承接这一份行动，不能重复claim。
+        return action;
+    }
+    async function drive() {
         while (true) {
-            const claimUrl = `${baseUrl}/execution/next-action?uid=${encodeURIComponent(uid)}`
-                + `&executorId=${encodeURIComponent(executorId)}`
-                + resinSnapshotQuery(resinSnapshot);
-            const action = await requestJson("POST", claimUrl, {}, config.bgi_tools.token);
+            const action = await claimNextAction();
             if (action.status === "NEEDS_RECONCILE") {
                 log.warn(`[计划驱动] 上一行动仅执行背包复核，不再消耗树脂：{0}`, action.materialName);
                 let observedOwned = null;
@@ -473,63 +529,60 @@ export async function runPlanDrivenCultivation(config) {
                     {}, config.bgi_tools.token);
                 if (result.status === "REPLANNING") continue;
                 log.info(`[计划驱动] 停止领取：{0}，{1}`, result.status, result.message);
-                return;
+                return outcome(result.status, result.message);
             }
             if (action.status === "PLAN_NEEDS_RECONCILE") {
                 const reconcile = await runInventoryReconcileOnce(
-                    config, inventoryReconcileState, `计划请求复核：${action.message}`);
+                    config, inventoryReconcileState, `计划请求复核：${action.message}`, action.inventoryReconcileCause);
                 if (reconcile.succeeded && reconcile.performed) {
-                    const afterReconcile = await requestJson(
-                        "POST", claimUrl, {}, config.bgi_tools.token);
+                    const afterReconcile = await claimNextAction();
                     if (afterReconcile.status === "ACTION" || afterReconcile.status === "NEEDS_RECONCILE") {
                         action.status = afterReconcile.status;
                         Object.assign(action, afterReconcile);
                     } else {
                         log.warn("[计划驱动] 完整库存复核后仍未开放行动，本轮停止：{0}，{1}",
                             afterReconcile.status, afterReconcile.message);
-                        return;
+                        return outcome(afterReconcile.status, afterReconcile.message);
                     }
                 } else if (!reconcile.succeeded) {
                     log.warn("[计划驱动] 完整库存复核未闭合，停止本轮执行");
-                    return;
+                    return outcome("NEEDS_RECONCILE", "INVENTORY_RECONCILE_UNRESOLVED");
                 } else {
-                    return;
+                    return outcome("NEEDS_RECONCILE", "INVENTORY_RECONCILE_ALREADY_ATTEMPTED");
                 }
             }
             if (action.status !== "ACTION") {
                 log.info(`[计划驱动] 停止领取：{0}，{1}`, action.status, action.message);
-                return;
+                return outcome(action.status, action.message);
             }
             if (action.actionType === "CRAFT_BATCH") {
                 const batchResult = await executeCraftBatchAction(
                     baseUrl, action, executorId, config);
                 if (batchResult.shouldReconcile) {
                     log.warn("[计划驱动] 批量合成后强制完整库存复核");
-                    if (!await runCultivationInventoryReconcile(config)) return;
+                    if (!await reconcileInventoryCore(config)) return outcome("NEEDS_RECONCILE", "POST_CRAFT_INVENTORY");
                 }
-                if (!batchResult.shouldContinue) return;
+                if (!batchResult.shouldContinue) return outcome(batchResult.status, batchResult.message);
                 continue;
             }
             if (action.actionType === "CRAFT") {
-            const shouldContinue = await executeCraftAction(baseUrl, action, executorId, config);
-            if (!shouldContinue) return;
+            const craftResult = await executeCraftAction(baseUrl, action, executorId, config);
+            if (!craftResult.shouldContinue) return outcome(craftResult.status, craftResult.message);
             log.warn("[计划驱动] 合成 {0} 后强制完整库存复核", action.materialName);
-            if (!await runCultivationInventoryReconcile(config)) return;
+            if (!await reconcileInventoryCore(config)) return outcome("NEEDS_RECONCILE", "POST_CRAFT_INVENTORY");
             continue;
         }
-        const shouldContinue = await executeAction(
-                baseUrl, action, executorId, config.bgi_tools.token);
-            if (action.actionType === "DOMAIN" || action.actionType === "WORLD_BOSS") {
-                resinSnapshot = await scanResinSnapshot();
-            }
-            if (!shouldContinue) return;
-        }
-    } catch (error) {
-        allowFinalRefresh = false;
-        throw error;
-    } finally {
-        if (startRefreshCompleted && allowFinalRefresh) {
-            await refreshCurrentOwned(config, "计划结束后");
+        const actionResinSnapshot = resinSnapshot;
+        resinSnapshot = null;
+        const executionResult = await executeAction(
+                baseUrl, action, executorId, config.bgi_tools.token, actionResinSnapshot);
+            if (!executionResult.shouldContinue) return outcome(executionResult.status, executionResult.message);
         }
     }
+    const terminal = await drive();
+    if (startRefreshCompleted || terminal.kind === "Completed") {
+        const refreshed = await refreshCurrentOwned(config, "计划结束后");
+        if (!refreshed && terminal.kind === "Completed") return outcome("NEEDS_RECONCILE", "FINAL_INVENTORY_UNRESOLVED");
+    }
+    return terminal;
 }

@@ -41,7 +41,7 @@ let moraDiff = 0;
 let state = {};
 let record = {};
 let CDInfo = [];
-let failcount = 0;
+const failedRoutes = new Set();
 let autoSalvageCount = 0;
 let furinaState = "unknown";
 let commands = []; // 命令数组（全局变量）
@@ -64,6 +64,7 @@ let rollingDelay = 25;
 let gameRegion;
 let lastsettimeTime = 0;
 
+// 普通脚本入口返回的 Promise 由宿主等待，保留原脚本执行模式。
 (async function () {
     setGameMetrics(1920, 1080, 1);
     dispatcher.AddTrigger(new RealtimeTimer("AutoSkip"));
@@ -185,6 +186,7 @@ let lastsettimeTime = 0;
     await writeRecord(accountName);
 
     // 只有当配置了autoOnline时才生成命令文件
+    assertCompletedRoutes();
     if (settings.autoOnline && settings.autoOnline.trim()) {
         await generateCommandFile();
     } else {
@@ -192,6 +194,12 @@ let lastsettimeTime = 0;
     }
 
 })();
+
+function assertCompletedRoutes() {
+    if (failedRoutes.size === 0) return;
+    const names = [...failedRoutes].slice(0, 8).map(path => path.split(/[\\/]/).pop());
+    throw new Error(`${failedRoutes.size}条狗粮路线未完成；成功路线已保留，失败路线未登记冷却：${names.join(", ")}`);
+}
 
 // 生成命令文件
 async function generateCommandFile() {
@@ -749,12 +757,15 @@ async function switchPartyIfNeeded(partyName) {
         if (!await genshin.switchParty(partyName)) {
             log.info("切换队伍失败，前往七天神像重试");
             await genshin.tpToStatueOfTheSeven();
-            await genshin.switchParty(partyName);
+            if (!await genshin.switchParty(partyName)) {
+                throw new Error(`队伍 ${partyName} 切换仍未确认，停止本批路线`);
+            }
         }
-    } catch {
+    } catch (error) {
         log.error("队伍切换失败，可能处于联机模式或其他不可切换状态");
         notification.error(`队伍切换失败，可能处于联机模式或其他不可切换状态`);
-        await genshin.returnMainUi();
+        // 恢复归宿主失败交接持有；这里不能吞异常并让调用方缓存成功队伍。
+        throw error;
     }
 }
 
@@ -988,6 +999,13 @@ async function runEndingAndExtraPath() {
 }
 
 async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "") {
+    // 只绑定已证实的炮台准备链，不能从目录名推断其它路线依赖。
+    const normalizePath = path => String(path).replace(/\\/g, '/').replace(/^\.\//, '');
+    const cannonRoot = 'assets/ArtifactsPath/额外/所有额外';
+    const cannonRoute = `${cannonRoot}/执行/01【额外】稻妻-踏鞴砂大炮点5.json`;
+    const cannonPreparation = ['000【复位程序】稻妻踏鞴砂大炮点.json',
+        '001【激活程序】稻妻大炮1.json', '001【激活程序】稻妻大炮2.json']
+        .map(name => `${cannonRoot}/准备/${name}`);
     if (state.cancel) return;
     if (folderFilePath === "") {
         return;
@@ -1013,9 +1031,19 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
         const Path = Paths[i];
         let success = true;
         // 如果 CDInfo 数组中已存在该文件名，则跳过
-        if (CDInfo.includes(Path.fullPath)) {
+        if (CDInfo.some(path => normalizePath(path) === normalizePath(Path.fullPath))) {
             log.info(`路线${Path.fullPath}今日已运行，跳过`);
             continue;
+        }
+        if (normalizePath(Path.fullPath) === cannonRoute) {
+            const completed = new Set(CDInfo.map(normalizePath));
+            const failed = new Set([...failedRoutes].map(normalizePath));
+            const missing = cannonPreparation.filter(path => !completed.has(path) || failed.has(path));
+            if (missing.length) {
+                failedRoutes.add(Path.fullPath);
+                log.warn(`PREREQUISITE_BLOCKED ${Path.fullPath}：准备未确认成功：${missing.join('、')}；不执行、不登记冷却，独立路线继续`);
+                continue;
+            }
         }
         if (PartyName != state.currentParty && PartyName) {
             //如果与当前队伍不同，尝试切换队伍，并更新队伍
@@ -1061,23 +1089,31 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 state.cancel = true;
                 throw error;
             }
+            // 只采纳宿主确认的异常类别，并仅对激活目录使用用户允许的跳过政策。
+            // 标记页不证明已开放或已激活；仍须先恢复主界面，也绝不登记CD。
+            const unavailableActivation = /[\\/]激活[\\/]/.test(Path.fullPath) &&
+                String(error.message || '').startsWith('[BGI_PATH_TARGET_UNAVAILABLE]');
+            if (!unavailableActivation) failedRoutes.add(Path.fullPath);
             success = false;
             if (state.cancel) {
-                return;
+                throw error;
             }
             try {
                 await genshin.returnMainUi();
                 await sleep(500);
             } catch (recoveryError) {
-                log.warn(`路线失败后返回主界面失败，继续下一条路线：${recoveryError.message}`);
+                log.error(`路线失败后返回主界面失败，停止剩余路线：${recoveryError.message}`);
+                throw recoveryError;
             }
-            log.warn(`路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
+            log.warn(unavailableActivation
+                ? `路线 ${Path.fileName} 跳过（TARGET_UNAVAILABLE），未完成激活且不登记冷却，继续下一条`
+                : `路线 ${Path.fileName} 执行失败，跳过当前路线并继续下一条`);
             continue;
         }
         if (pathRes != null && typeof pathRes.success === 'boolean') {
             if (!pathRes.success) {
                 log.error(`路线运行失败：${pathRes.message}`);
-                failcount++;
+                failedRoutes.add(Path.fullPath);
                 skiprecord = true;
                 await sleep(5000);
             } else {
@@ -1104,17 +1140,20 @@ async function runPaths(folderFilePath, PartyName, doStop, furinaRequirement = "
                 if (attempt < maxAttempts) await sleep(1000);
             }
             if (!confirmed) {
-                failcount++;
+                failedRoutes.add(Path.fullPath);
                 skiprecord = true;
                 log.error(`路线 ${Path.fileName} 未确认到达，不登记冷却`);
             }
         } else {
-            failcount++;
+            failedRoutes.add(Path.fullPath);
             skiprecord = true;
             log.error(`路线 ${Path.fileName} 缺少有效终点和宿主成功结果，不登记冷却`);
         }
 
         if (!skiprecord) {
+            for (const failed of failedRoutes) {
+                if (normalizePath(failed) === normalizePath(Path.fullPath)) failedRoutes.delete(failed);
+            }
             CDInfo = [...new Set([...CDInfo, Path.fullPath])];
             await writeCDInfo(accountName);
         }
@@ -1179,7 +1218,7 @@ async function parsePathing(pathFilePath) {
 //在调用地图追踪后伪造该地图追踪结束运行的日志信息，如 await fakeLog(`地图追踪.json`, false, false, 0);
 //如此便可以在js运行过程中伪造地图追踪的日志信息，可以在日志分析等中查看
 
-async function fakeLog(name, isJs, isStart, duration) {
+async function fakeLog(name, isJs, isStart, duration, outcome = "未确认") {
     await sleep(10);
     const currentTime = Date.now();
     // 参数检查
@@ -1231,7 +1270,7 @@ async function fakeLog(name, isJs, isStart, duration) {
         // 处理 isJs = true 且 isStart = false 的情况
         const logMessage = `正在伪造js结束的日志记录\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
-            `→ 脚本执行结束: "${name}", 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
+            `→ 脚本执行结束: "${name}", 结果: ${outcome}, 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
             `------------------------------`;
         log.debug(logMessage);
@@ -1249,7 +1288,7 @@ async function fakeLog(name, isJs, isStart, duration) {
         // 处理 isJs = false 且 isStart = false 的情况
         const logMessage = `正在伪造地图追踪结束的日志记录\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
-            `→ 脚本执行结束: "${name}", 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
+            `→ 脚本执行结束: "${name}", 结果: ${outcome}, 耗时: ${durationMinutes}分${durationSeconds}秒\n\n` +
             `[${formattedTime}] [INF] BetterGenshinImpact.Service.ScriptService\n` +
             `------------------------------`;
         log.debug(logMessage);
@@ -1271,14 +1310,21 @@ async function runPath(fullPath, targetItemPath = null) {
 
     /* ---------- 主任务 ---------- */
     const pathingTask = (async () => {
+        const startedAt = Date.now();
+        let outcome = "失败";
         try {
             log.info(`开始执行路线: ${fullPath}`);
-            await fakeLog(fullPath, false, true, 0);
+            try { await fakeLog(fullPath, false, true, 0); } catch { /* 诊断不改变路线结果。 */ }
             const runResult = await pathingScript.runFile(fullPath);
-            await fakeLog(fullPath, false, false, 0);
+            outcome = runResult?.success === true ? "完成" : "未确认";
             return runResult;
+        } catch (error) {
+            log.error(`执行路线 ${fullPath} 时发生错误：${error.message}`);
+            throw error;
         } finally {
             state.running = false;
+            try { await fakeLog(fullPath, false, false, Math.max(0, Date.now() - startedAt), outcome); }
+            catch { /* 诊断异常不能覆盖原始路径异常或成功结果。 */ }
         }
     })();
 
@@ -1308,9 +1354,16 @@ async function runPath(fullPath, targetItemPath = null) {
     })();
 
     /* ---------- 并发等待 ---------- */
-    const [pathingResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
-    if (pathingResult.status === "rejected") {
-        throw pathingResult.reason;
+    const [pathingResult, pickupResult, recoveryResult] = await Promise.allSettled([pathingTask, pickupTask, errorProcessTask]);
+    // 目标不可用不能掩盖伴随任务的独立故障；这种情况不能升级为合法跳过。
+    if (pathingResult.status === 'rejected' &&
+        String(pathingResult.reason?.message || '').startsWith('[BGI_PATH_TARGET_UNAVAILABLE]')) {
+        for (const result of [pickupResult, recoveryResult]) {
+            if (result.status === 'rejected') throw result.reason;
+        }
+    }
+    for (const result of [pathingResult, pickupResult, recoveryResult]) {
+        if (result.status === "rejected") throw result.reason;
     }
     return pathingResult.value;
 }

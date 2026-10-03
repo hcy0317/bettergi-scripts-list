@@ -145,15 +145,27 @@ export async function getValueByMultiCheckboxName(name) {
 }
 
 /*===========================================[check]===========================================*/
+function isManagedCultivationMode() {
+    return settings.cultivation_plan_mode === true || settings.cultivation_inventory_reconcile_mode === true;
+}
+
 /**
  * 检查密钥是否正确
  */
 export async function checkKey(key = "") {
-    if (config?.info?.manifest?.last_key?.trim()!==config?.info?.manifest?.key?.trim()&&config?.info?.manifest?.last_key?.trim()=== key?.trim()){
-        throw new Error("脚本更新，密钥已经变更。(重大结构变更请前往文档查看)");
-    }else if (config?.info?.manifest?.key?.trim() !== key?.trim()) {
-        throw new Error("密钥错误");
+    const current = config?.info?.manifest?.key?.trim();
+    const previous = config?.info?.manifest?.last_key?.trim();
+    const supplied = typeof key === "string" ? key.trim() : "";
+    if (current && supplied === current) return;
+    // 托管养成协议独立于旧版固定计划结构；只兼容声明的上一版，不接受任意旧标记。
+    if (current && previous && previous !== current && supplied === previous && isManagedCultivationMode()) {
+        log.warn("托管养成入口兼容上一版脚本标记；保留原设置，不加载旧版固定计划");
+        return;
     }
+    if (previous && previous !== current && supplied === previous) {
+        throw new Error("脚本更新，密钥已经变更。(重大结构变更请前往文档查看)");
+    }
+    throw new Error("密钥错误");
 }
 
 /*===========================================[init]===========================================*/
@@ -249,7 +261,18 @@ export async function initConfig() {
     config.bgi_tools.api.httpPushAllCountryConfig = settings.bgi_tools_http_push_all_country_config
     config.bgi_tools.api.httpPushAllBossConfig = settings.bgi_tools_http_push_all_boss_config
     config.bgi_tools.open.open_push = settings.bgi_tools_open_push
-    log.debug(`|bgi_tools:{1}`, JSON.stringify(config.bgi_tools))
+    if (isManagedCultivationMode()) {
+        // 托管入口只接受服务端逐项下发的动作，不混入旧固定计划或反向推送旧配置。
+        config.bgi_tools.open.open_push = false;
+        config.run.config = "";
+        config.run.loads = [];
+        config.run.loop_plan = false;
+        config.run.exclude_run_exception = false;
+        log.info("已初始化独立托管养成入口；跳过旧固定计划加载和自动配置推送");
+        return;
+    }
+    log.debug("bgi_tools配置已初始化，拉取接口已配置={1}，认证值已配置={2}",
+        !!config.bgi_tools.api.httpPullJsonConfig, !!config.bgi_tools.token.value)
     // const text = file.readTextSync(config.path.domain);
     // log.info("config.path.domain:{1}",config.path.domain)
     // log.info("text:{2}",text)

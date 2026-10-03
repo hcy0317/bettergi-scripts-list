@@ -9,6 +9,13 @@
 
 // ==================== 全局方法 ====================
 
+/** 当前脚本专属终态。受管脚本应先requireExplicitOutcome，再在结束时report一次。 */
+declare const taskResult: {
+    requireExplicitOutcome(): void;
+    check(): void;
+    report(kind: "Completed" | "Skipped" | "Deferred" | "NeedsReconcile" | "Failed" | "Cancelled", reason: string): void;
+};
+
 /**
  * 延迟执行（异步）
  * @param millisecondsTimeout 延迟时间（毫秒）
@@ -168,22 +175,27 @@ declare const keyMouseScript: {
 /**
  * 自动路径追踪脚本
  */
+interface PathingRunResult {
+  /** 原生执行器已确认完成；失败或取消会拒绝 Promise，不会返回此结果。 */
+  readonly success: true;
+}
+
 declare const pathingScript: {
   /**
    * 执行路径追踪 JSON
    * @param json 路径追踪 JSON 字符串
    */
-  run(json: string): Promise<void>;
+  run(json: string): Promise<PathingRunResult>;
   /**
    * 执行路径追踪文件
    * @param path 文件路径（相对于脚本根目录）
    */
-  runFile(path: string): Promise<void>;
+  runFile(path: string): Promise<PathingRunResult>;
   /**
    * 从已订阅的内容中运行文件
    * @param path 在 User\AutoPathing 目录下的文件路径
    */
-  runFileFromUser(path: string): Promise<void>;
+  runFileFromUser(path: string): Promise<PathingRunResult>;
   // ==== BEGIN AUTO-GENERATED ALIASES ====
   Run: typeof pathingScript.run;
   RunFile: typeof pathingScript.runFile;
@@ -310,6 +322,8 @@ declare const genshin: {
    * @returns 是否成功
    */
   switchParty(partyName: string): Promise<boolean>;
+  /** 只读世界操作证据JSON；Unknown/canProbe不表示战斗结束，也不能授权消费。 */
+  inspectWorldUi(): string;
   /**
    * 清除当前调度器的队伍缓存
    */
@@ -347,6 +361,8 @@ declare const genshin: {
    * 返回主界面
    */
   returnMainUi(): Promise<void>;
+  /** 退出秘境并等待连续新帧确认秘境外主界面；失败或取消时拒绝。 */
+  exitDomain(): Promise<void>;
   /**
    * 自动钓鱼
    * @param fishingTimePolicy 钓鱼时间策略（默认 0）
@@ -402,6 +418,7 @@ declare const genshin: {
   GoToAdventurersGuild: typeof genshin.goToAdventurersGuild;
   GoToCraftingBench: typeof genshin.goToCraftingBench;
   ReturnMainUi: typeof genshin.returnMainUi;
+  ExitDomain: typeof genshin.exitDomain;
   AutoFishing: typeof genshin.autoFishing;
   Relogin: typeof genshin.relogin;
   WonderlandCycle: typeof genshin.wonderlandCycle;
@@ -468,6 +485,11 @@ declare const file: {
    * @returns 文件内容
    */
   readTextSync(path: string): string;
+  /** 严格读取；保留原生缺失、权限、格式错误，不用空字符串代替读取失败。 */
+  readTextSyncOrThrow(path: string): string;
+  /** 原文匹配后原子写入；null表示文件不存在。冲突返回false，I/O错误抛出，不能按成功消费。 */
+  compareExchangeTextSync(path: string, expectedContent: string | null, content: string): boolean;
+  readTextOrThrow(path: string): Promise<string>;
   /**
    * 异步读取文本文件
    * @param path 文件路径
@@ -633,6 +655,8 @@ declare const dispatcher: {
    * @returns 取消令牌
    */
   getLinkedCancellationToken(): CancellationToken;
+  /** 等待本脚本的宿主任务。超时返回false；不把超时当取消完成，仍须退休原任务。 */
+  waitForTask(task: Promise<unknown>, timeoutMilliseconds: number): Promise<boolean>;
   /**
    * 运行自动秘境任务
    * @param param 秘境任务参数
@@ -645,6 +669,9 @@ declare const dispatcher: {
    * @param customCt 自定义取消令牌（可选）
    */
   runAutoFightTask(param: AutoFightParam, customCt?: CancellationToken | null): Promise<void>;
+  /** 只准备模型，不启动战斗；空参数仅准备公共OCR。true表示已按当前队伍核对TXT/JSON策略，实际战斗仍重新取证。 */
+  prepareAutoFightTask(param?: AutoFightParam | null, customCt?: CancellationToken | null): Promise<boolean>;
+  PrepareAutoFightTask: typeof dispatcher.prepareAutoFightTask;
   /**
    * 运行自动地脉花任务
    * @param param 自动地脉花任务参数

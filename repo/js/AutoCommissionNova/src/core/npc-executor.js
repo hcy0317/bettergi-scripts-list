@@ -28,8 +28,6 @@ export async function executeNpcCommission(commission, stepRegistry, accountUid)
         }
 
         log.debug("执行统一NPC委托流程: {name}", commission.name);
-        await trackCommission(commission.name);
-
         const context = createCommissionContext({
             type: COMMISSION_TYPE.NPC,
             country: commission.country || "蒙德",
@@ -41,6 +39,7 @@ export async function executeNpcCommission(commission, stepRegistry, accountUid)
         });
 
         await prepareCommissionBattleParty(context);
+        await trackCommission(commission.name);
         const success = await runStepsWithContext(context, { sleepMs: 250, stopOnError: true });
         if (success) {
             log.debug("NPC委托流程执行完成: {name}", commission.name);

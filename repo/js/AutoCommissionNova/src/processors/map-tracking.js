@@ -3,6 +3,7 @@
  * 路径通过 context.resolveResource 解析，自动适配 NPC / Basic 委托
  */
 import { defineStep } from "./define-step.js";
+import { runCommissionPath } from "../utils/path-healing-recovery.js";
 
 export default defineStep({
     type: "地图追踪",
@@ -16,7 +17,7 @@ export default defineStep({
 
         log.info("执行地图追踪: {file}", fileName);
         log.debug("地图追踪完整路径: {path}", normalizedPath);
-        await pathingScript.runFile(fullPath);
+        await runCommissionPath(fullPath, context, true);
         log.debug("地图追踪执行完成");
     },
 });

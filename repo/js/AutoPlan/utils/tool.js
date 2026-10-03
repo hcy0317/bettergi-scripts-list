@@ -216,48 +216,52 @@ export async function toMainUi() {
  */
 export async function outDomainUI() {
     Log.info(`{0}`, "退出秘境");
-    const ocrRegion = {
-        x: 509,
-        y: 259,
-        w: 901,
-        h: 563
+    if (typeof genshin.exitDomain === "function") {
+        // 原生入口拥有退出确认、加载等待及秘境外新帧验证；拒绝时不得回退重发。
+        await genshin.exitDomain();
+        return;
     }
-    let ms = 300
-    let index = 1
-    let tryMax = false
-    let inMainUI = false
-    await sleep(ms);
-    //点击确认按钮
-    await findTextAndClick('地脉异常')
-    await sleep(ms * 2);
-    while (!await UI.isInOutDomainUI()) {
-        if (UI.isInMainUI()) {
-            inMainUI = true
-            break
+    const deadline = Date.now() + 20000;
+    let confirmed = false, observedLoading = false, stableMain = 0, attempts = 0;
+    let nextRequest = 0;
+    while (Date.now() < deadline) {
+        if (confirmed) {
+            // 弹窗尚未消失不算加载；确认后仍短暂显示秘境HUD，也不能当作已经离开。
+            const exitPrompt = await UI.isInOutDomainUI();
+            const main = UI.isInMainUI();
+            if (!exitPrompt && !main) observedLoading = true;
+            stableMain = observedLoading && !exitPrompt && main ? stableMain + 1 : 0;
+            if (stableMain >= 2) return;
+        } else {
+            const frame = captureGameRegion();
+            let exitPrompt = false;
+            try {
+                const rows = frame.findMulti(RecognitionObject.Ocr(509, 259, 901, 563));
+                let confirmButton = null, revivePrompt = false;
+                for (let i = 0; i < rows.count; i++) {
+                    const row = rows[i];
+                    if (!row.isExist() || !row.text) continue;
+                    const text = row.text.replace(/\s+/g, "");
+                    exitPrompt = exitPrompt || text.includes("退出秘境");
+                    revivePrompt = revivePrompt || text.includes("复苏") || text.includes("复活");
+                    if (text === "确认") confirmButton = row;
+                }
+                // 退出标题与按钮必须来自同一新截图，不能把随后出现的复苏框当退出确认。
+                if (exitPrompt && !revivePrompt && confirmButton) {
+                    confirmButton.click();
+                    confirmed = true;
+                    Log.debug("旧宿主退出确认已点击，等待加载及稳定主界面");
+                }
+            } finally { frame.dispose(); }
+            if (!confirmed && !exitPrompt && attempts < 3 && Date.now() >= nextRequest) {
+                await keyPress("ESCAPE");
+                attempts++;
+                nextRequest = Date.now() + 1000;
+            }
         }
-        await sleep(ms);
-        await keyPress("ESCAPE");
-        await sleep(ms * 2);
-        if (index > 3) {
-            Log.error(`多次尝试匹配退出秘境界面失败 假定已经退出处理`);
-            tryMax = true
-            break
-        }
-        index += 1
+        await sleep(250);
     }
-    if ((!tryMax) && (!inMainUI) && await UI.isInOutDomainUI()) {
-        try {
-            const Box={x:ocrRegion.x, y:ocrRegion.y, width:ocrRegion.w, height:ocrRegion.h}
-            await drawBoxDebug(settings.debug,Box, 400,new Pen(Color.NavajoWhite, 2))
-
-            //点击确认按钮
-            await findTextAndClick('确认', ocrRegion.x, ocrRegion.y, ocrRegion.w, ocrRegion.h)
-        } catch (e) {
-            // Log.error(`多次尝试点击确认失败 假定已经退出处理`);
-        }
-    }
-
-
+    throwError(`未确认退出秘境：确认=${confirmed}，加载=${observedLoading}，主界面稳定帧=${stableMain}；停止后续处理，请使用支持exitDomain的新版BetterGI`);
 }
 
 export async function outStygianOnslaughtUI() {

@@ -5,6 +5,7 @@ import { bvPageOcrRegionText } from "../vision/ocr-utils.js";
 import { DEFAULT_BATTLE_STRATEGY, loadPartyConfigForContext, resolveBattleStrategy } from "../loaders/party-config.js";
 import { isCancellationError } from "../utils/error-utils.js";
 import { defineStep } from "./define-step.js";
+import { retireScopedTask } from "../utils/async-task-retirement.js";
 import {
     parseImpregnableDefenseConfig,
     parseImpregnableDefenseKills,
@@ -88,10 +89,7 @@ async function stopFight(fight) {
     if (!fight) return;
     fight.state.intentionalCancel = true;
     fight.cts.Cancel();
-    const completed = await Promise.race([
-        fight.task.then(() => true),
-        sleep(FIGHT_CANCEL_TIMEOUT_MS).then(() => false),
-    ]);
+    const completed = await dispatcher.waitForTask(fight.task, FIGHT_CANCEL_TIMEOUT_MS);
     if (!completed) throw new Error("取消自动战斗超过 10 秒仍未退出");
 }
 
@@ -141,6 +139,7 @@ async function runImpregnableDefense(step, context) {
     let currentWave = 1;
     let maximumKills = null;
     let fight = null;
+    let failure = null;
 
     /**
      * 检查步骤总时限。
@@ -262,12 +261,11 @@ async function runImpregnableDefense(step, context) {
 
             await sleep(POLL_INTERVAL_MS);
         }
+    } catch (error) {
+        failure = error;
+        throw error;
     } finally {
-        if (fight) {
-            fight.state.intentionalCancel = true;
-            try { fight.cts.Cancel(); } catch (_) { /* 已释放或已取消。 */ }
-            disposeFight(fight);
-        }
+        await retireScopedTask(fight, failure);
     }
 }
 

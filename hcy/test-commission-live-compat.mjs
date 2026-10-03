@@ -24,7 +24,7 @@ async function mainScenario({skip=false,valid=true,allDone=true,enter=true}={}) 
   '../vision/index.js':{enterCommissionScreen:async()=>{entered++;return enter;}},
   '../loaders/global-config.js':{loadGlobalConfig:()=>({checkEncounterPoints:skip,skipSafeTeleport:true})},
   '../loaders/process-scope.js':{scanCommissionScopes:()=>({list:[]})}
- },{genshin:{returnMainUi:async()=>{}},sleep:async()=>{}});
+ },{genshin:{returnMainUi:async()=>{}},dispatcher:{PrepareAutoFightTask:async()=>false},sleep:async()=>{}});
  let error;try{await mod.executeMainProcess({},[]);}catch(e){error=e;}
  return {executions,saved,entered,error};
 }
@@ -52,11 +52,12 @@ let teamInputs=0;
 const party=await load('src/core/commission-party-switcher.js',{
  '../config/index.js':{PATHS:{COMMISSION_CATALOG:'fixture'}},
  '../loaders/party-config.js':{loadPartyConfigForContext:()=>({}),resolvePartySelection:()=>({mode:'name',teamName:''}),validateCompleteRoles:()=>({ok:false})}
-},{file:{readTextSync:()=>JSON.stringify({switchBattleParty:['fixture']})},genshin:{switchParty:async()=>{teamInputs++;return true;}}});
+},{file:{readTextSync:()=>JSON.stringify({switchBattleParty:['fixture']})},genshin:{switchParty:async()=>{teamInputs++;return true;}},
+   AutoFightParam:class{constructor(strategy){this.strategy=strategy;}},dispatcher:{PrepareAutoFightTask:async()=>true}});
 assert.equal(await party.prepareCommissionBattleParty({commissionName:'fixture'}),true);assert.equal(teamInputs,0);passed++;
 const step=await load('src/processors/switch-commission-party.js',{
  '../loaders/party-config.js':{loadPartyConfigForContext:()=>({}),resolvePartySelection:()=>({mode:'name',teamName:''})},
- '../core/commission-party-switcher.js':{switchPartyByName:async()=>{teamInputs++;return true;},switchPartyWithRoles:async()=>{teamInputs++;return true;}},
+ '../core/commission-party-switcher.js':{switchPartyByName:async()=>{teamInputs++;return true;},switchPartyWithRoles:async()=>{teamInputs++;return true;},prepareBattleVision:party.prepareBattleVision},
  './define-step.js':{defineStep:spec=>spec}
 });
 assert.equal(await step.default.run({data:'战斗'},{}),true);assert.equal(teamInputs,0);passed++;

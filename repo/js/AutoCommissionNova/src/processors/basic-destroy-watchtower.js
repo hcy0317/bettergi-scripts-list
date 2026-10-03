@@ -7,6 +7,7 @@ import { bvPageOcrRegionText } from "../vision/ocr-utils.js";
 import { defineStep } from "./define-step.js";
 import { isCancellationError } from "../utils/error-utils.js";
 import { readTrackedDescriptionText } from "./commission-desc-utils.js";
+import { retireScopedTask } from "../utils/async-task-retirement.js";
 
 const WATCHTOWER_CONFIG = {
     /** 单次执行最多摧毁的哨塔数量；攀高危险最多两个，之后的任务图标可能属于其他委托。 */
@@ -361,26 +362,13 @@ function createCombatLoop(fullScript, strategyCount) {
 async function stopCombatLoop(combat) {
     combat.state.intentionalCancel = true;
     combat.cts.Cancel();
-    const completed = await Promise.race([
-        combat.task.then(() => true),
-        sleep(WATCHTOWER_CONFIG.combatCancelTimeout).then(() => false),
-    ]);
+    const completed = await dispatcher.waitForTask(combat.task, WATCHTOWER_CONFIG.combatCancelTimeout);
     if (!completed) {
         throw new Error(`取消哨塔简易策略超过 ${WATCHTOWER_CONFIG.combatCancelTimeout / 1000} 秒仍未退出`);
     }
     if (combat.state.error && !isCancellationError(combat.state.error)) {
         throw combat.state.error;
     }
-}
-
-/**
- * 释放简易策略的取消令牌源。
- * @param {{cts: Object}|null} combat - 当前战斗句柄
- * @returns {void}
- */
-function disposeCombatLoop(combat) {
-    if (!combat) return;
-    try { combat.cts.Dispose(); } catch (_) { /* ClearScript 版本可能不暴露 Dispose。 */ }
 }
 
 /**
@@ -407,6 +395,7 @@ async function attackUntilDestroyed(initialCount, strategies, context) {
     const fullScript = strategies.join("\n");
     const combat = createCombatLoop(fullScript, strategies.length);
     let result = null;
+    let failure = null;
     try {
         while (result === null) {
             assertCombatLoopRunning(combat);
@@ -436,14 +425,10 @@ async function attackUntilDestroyed(initialCount, strategies, context) {
         await stopCombatLoop(combat);
         return result;
     } catch (error) {
-        if (!combat.state.intentionalCancel) await stopCombatLoop(combat);
+        failure = error;
         throw error;
     } finally {
-        if (!combat.state.intentionalCancel) {
-            combat.state.intentionalCancel = true;
-            try { combat.cts.Cancel(); } catch (_) { /* 已释放或已取消。 */ }
-        }
-        disposeCombatLoop(combat);
+        await retireScopedTask(combat, failure);
     }
 }
 
@@ -454,7 +439,9 @@ async function attackUntilDestroyed(initialCount, strategies, context) {
  */
 async function destroyAllWatchtowers(options, context) {
     let processedCount = 0;
-    let attackStrategies = null;
+    // 菜单收束和固定等待在接近前完成，到点后不再空站着做这些准备。
+    await genshin.returnMainUi();
+    await sleep(500);
 
     const pathCount = options.paths.length;
     while (processedCount < WATCHTOWER_CONFIG.maxDestroyCount &&
@@ -462,7 +449,7 @@ async function destroyAllWatchtowers(options, context) {
         if (options.navigation === NAVIGATION_PATH) {
             const fullPath = context.resolveResource(options.paths[processedCount]);
             log.info("使用路径追踪前往第 {count} 个哨塔: {path}", processedCount + 1, fullPath);
-            await pathingScript.runFile(fullPath);
+            await runCommissionPath(fullPath, context);
             log.info("已到达第 {count} 条路径终点，开始准备攻击哨塔", processedCount + 1);
         }
         log.info("开始处理第 {count} 个哨塔", processedCount + 1);
@@ -481,7 +468,9 @@ async function destroyAllWatchtowers(options, context) {
             }
         }
 
+        const arrivedAt = Date.now();
         const initialStatus = readDestroyStatus(context);
+        const statusMs = Date.now() - arrivedAt;
         const initialCount = initialStatus.progress ? initialStatus.progress.current : null;
         if (initialStatus.completed) return true;
         if (initialStatus.progress && initialStatus.progress.current >= initialStatus.progress.total) return true;
@@ -491,11 +480,11 @@ async function destroyAllWatchtowers(options, context) {
             log.warn("攻击前未识别到哨塔摧毁进度，将继续等待委托完成提示");
         }
 
-        if (!attackStrategies) {
-            await genshin.returnMainUi();
-            await sleep(500);
-            attackStrategies = loadCurrentTeamStrategies();
-        }
+        // 路径可能改变队伍；以到点后的当前队伍为准，不复用出发前名单。
+        const strategyAt = Date.now();
+        const attackStrategies = loadCurrentTeamStrategies();
+        log.debug("WATCHTOWER_HANDOFF arrivalToCombatMs={total} statusMs={status} strategyMs={strategy}",
+            Date.now() - arrivedAt, statusMs, Date.now() - strategyAt);
 
         const attackResult = await attackUntilDestroyed(initialCount, attackStrategies, context);
         if (attackResult === ATTACK_RESULT.COMPLETED) {
@@ -571,3 +560,4 @@ export default defineStep({
         }
     },
 });
+import { runCommissionPath } from "../utils/path-healing-recovery.js";

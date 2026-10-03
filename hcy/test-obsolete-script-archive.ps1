@@ -42,6 +42,10 @@ try {
     Write-Output 'BetterGI obsolete script archive contracts passed'
 }
 finally {
+    $cleanupRoot = [IO.Path]::GetFullPath($fixtureRoot)
+    $cleanupBase = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if (-not $cleanupRoot.StartsWith($cleanupBase, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($cleanupRoot) -notlike 'bettergi-script-archive-*') { throw 'Unsafe fixture cleanup target.' }
     if (Test-Path -LiteralPath $fixtureRoot) {
         Remove-Item -LiteralPath $fixtureRoot -Recurse -Force
     }

@@ -12,8 +12,8 @@ const config = () => ({
 });
 
 async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
-    nextActions = [], craft, returnMain, bench, resinVisible = false, boss } = {}) {
-    const logs = [], scans = [], submissions = [], events = [], claims = [];
+    nextActions = [], craft, returnMain, bench, resinVisible = false, boss, outcomeApi = true } = {}) {
+    const logs = [], scans = [], submissions = [], events = [], claims = [], outcomes = [];
     const actions = [...nextActions];
     let now = 0, crafts = 0;
     class ClockDate extends Date {
@@ -30,16 +30,19 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
     const ocr = () => ({ kind: "ocr" });
     const context = vm.createContext({
         console, settings: {}, Date: ClockDate,
+        taskResult: outcomeApi ? { requireExplicitOutcome() {}, check() {}, report(kind, reason) { outcomes.push({kind, reason}); } } : undefined,
         sleep: async ms => { now += ms; },
         keyPress: async key => { events.push("key:" + key); }, click() {},
         Pen: class {}, Color: { Red: "red", RoyalBlue: "blue" },
         AutoBossParam: class {}, CountInventoryItemParam: class {},
+        AutoDomainParam: class { SetResinPriorityList() {} },
         GridScreenName: { CharacterDevelopmentItems: "CharacterDevelopmentItems" },
         ItemIconRecognitionMode: { Item: "Item" },
         captureGameRegion: () => ({ width: 1920, height: 1080,
             find: imageResult, findMulti: () => resinVisible ? [{ text: "0/200" }] : [], dispose() {} }),
         genshin: {
             returnMainUi: restoreMain, ReturnMainUi: restoreMain, setBigMapZoomLevel: async () => {},
+            exitDomain: async () => { events.push("exit-domain"); },
             tpToStatueOfTheSeven: async () => { events.push("statue"); },
             GoToCraftingBench: async country => { events.push("bench"); if (bench) await bench(country); },
             CraftMaterial: async (name, quantity) => {
@@ -53,6 +56,7 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         file: { ReadImageMatSync: readImage, readImageMatSync: readImage },
         SoloTask: class { constructor(name, param) { this.name = name; this.param = param; } },
         dispatcher: {
+            async RunAutoDomainTask() { events.push("domain"); return {"霜仙花": 1}; },
             async RunAutoBossTask() { events.push("boss"); return boss ? boss() : { "蕈王钩喙": 1 }; },
             async RunCountInventoryItemTask(param) { scans.push({ single: param.ItemName }); return 10; },
             async runTask(task) {
@@ -93,11 +97,62 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
     await entry.link((specifier, parent) => load(path.resolve(
         parent.identifier === entryPath ? path.join(root, "utils") : path.dirname(parent.identifier), specifier + ".js")));
     await entry.evaluate();
-    return { logs, scans, submissions, events, claims,
+    return { logs, scans, submissions, events, claims, outcomes,
         reconcile: () => entry.namespace.runCultivationInventoryReconcile(config()),
         run: () => entry.namespace.runPlanDrivenCultivation(config()),
-        physical: modules.get(path.join(root, "utils/physical.js")).namespace.Physical };
+        physical: modules.get(path.join(root, "utils/physical.js")).namespace.Physical,
+        handlers: modules.get(path.join(root, "utils/load_check_run.js")).namespace.taskHandlerMap };
 }
+
+test("managed BUSY cannot be reported as a completed script", async () => {
+    const runtime = await createRuntime({nextActions: [{status: "BUSY", message: "lease held"}]});
+    await runtime.run();
+    assert.equal(runtime.outcomes.length, 1);
+    assert.equal(runtime.outcomes[0].kind, "Deferred");
+    assert(!runtime.events.includes("key:M"), "BUSY must not start a resin map scan");
+    assert(runtime.claims[0].includes("prepareOnly=true"));
+});
+
+test("old action reconciliation does not require a resin snapshot first", async () => {
+    const runtime = await createRuntime({nextActions: [
+        {status: "NEEDS_RECONCILE", actionId: "old", revision: 1, materialName: "霜仙花"},
+        {status: "COMPLETED"},
+    ]});
+    await runtime.run();
+    assert(!runtime.events.includes("key:M"));
+    assert.equal(runtime.submissions.filter(x => x.idempotencyKey === "old:result").length, 1);
+});
+
+for (const [status, kind] of [["COMPLETED", "Completed"], ["NO_PLAN", "Skipped"],
+    ["NO_TARGETS", "Skipped"], ["WAITING", "Deferred"], ["UNKNOWN_STATUS", "NeedsReconcile"]]) {
+    test(`managed terminal ${status} preserves ${kind}`, async () => {
+        const runtime = await createRuntime({nextActions: [{status}]});
+        await runtime.run();
+        assert.equal(runtime.outcomes.length, 1);
+        assert.equal(runtime.outcomes[0].kind, kind);
+    });
+}
+
+test("COMPLETED with an unresolved final inventory is not completion", async () => {
+    const runtime = await createRuntime({nextActions: [{status: "COMPLETED"}], observationStatus: "NEEDS_RECONCILE"});
+    await runtime.run();
+    assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+    assert.match(runtime.outcomes[0].reason, /FINAL_INVENTORY_UNRESOLVED/);
+});
+
+test("an old host without the result protocol stops before game or HTTP work", async () => {
+    const runtime = await createRuntime({outcomeApi: false});
+    await assert.rejects(runtime.run(), /BGI_TASK_OUTCOME_UNSUPPORTED/);
+    assert.deepEqual(runtime.events, []);
+    assert.deepEqual(runtime.claims, []);
+    assert.deepEqual(runtime.scans, []);
+});
+
+test("NO_TARGETS reconciliation is a skip, although its legacy boolean is true", async () => {
+    const runtime = await createRuntime({targets: {status: "NO_TARGETS"}});
+    assert.equal(await runtime.reconcile(), true);
+    assert.equal(runtime.outcomes[0].kind, "Skipped");
+});
 
 test("Materials requests use ItemV2 directly and report the final frost flower count", async () => {
     const runtime = await createRuntime();
@@ -150,33 +205,195 @@ test("failure to exit the crafting page stops instead of scanning inventory on t
 });
 
 test("terminal combat or cancellation during a batch does not send recovery or later game inputs", async () => {
-    for (const message of ["[BGI_COMBAT_UNCONFIRMED] 未结束", "用户取消"]) {
+    for (const message of ["[BGI_COMBAT_UNCONFIRMED] 未结束", "[BGI_TASK_CANCELLED] 用户取消"]) {
         const runtime = await createRuntime({ nextActions: [batch], craft: () => { throw new Error(message); } });
-        await assert.rejects(runtime.run(), new RegExp(message.includes("BGI") ? "BGI_COMBAT_UNCONFIRMED" : "用户取消"));
+        await assert.rejects(runtime.run(), new RegExp(message.includes("COMBAT") ? "BGI_COMBAT_UNCONFIRMED" : "BGI_TASK_CANCELLED"));
         assert.deepEqual(runtime.events.slice(runtime.events.indexOf("craft:缺料项")), ["craft:缺料项"]);
         assert.equal(runtime.scans.length, 1);
     }
 });
 
 test("missing resin icons stay unknown and do not send a false zero-resin snapshot", async () => {
-    const runtime = await createRuntime();
+    const runtime = await createRuntime({nextActions: [{status: "NEEDS_RESIN_SNAPSHOT"}, {status: "WAITING"}]});
     assert.equal(await runtime.physical.countOriginalResinBackup(), -1);
     assert.equal(await runtime.physical.countCondensedResin(), -1);
     await runtime.run();
-    assert.doesNotMatch(runtime.claims[0], /originalResinCount|condensedResinCount/);
+    assert.equal(runtime.claims.length, 2);
+    assert(runtime.claims[0].includes("prepareOnly=true"));
+    assert.doesNotMatch(runtime.claims[1], /originalResinCount|condensedResinCount/);
     assert(runtime.logs.some(line => line.includes("树脂快照含未知值")));
 });
 
 test("an explicitly recognized zero resin count remains zero", async () => {
-    const runtime = await createRuntime({ resinVisible: true });
+    const runtime = await createRuntime({ resinVisible: true,
+        scan: () => ({ "须臾树脂": 0, "脆弱树脂": 0 }),
+        nextActions: [{status: "NEEDS_RESIN_SNAPSHOT"}, {status: "WAITING"}] });
     await runtime.run();
-    assert.match(runtime.claims[0], /originalResinCount=0/, runtime.logs.filter(line => line.includes("树脂快照")).join("\n"));
-    assert.match(runtime.claims[0], /condensedResinCount=0/);
+    assert.equal(runtime.claims.length, 2);
+    assert.doesNotMatch(runtime.claims[0], /originalResinCount/);
+    assert.match(runtime.claims[1], /originalResinCount=0/, runtime.logs.filter(line => line.includes("树脂快照")).join("\n"));
+    assert.match(runtime.claims[1], /condensedResinCount=0/);
+});
+
+test("resin snapshot reads consumables from the inventory, never the map replenishment pane", async () => {
+    const runtime = await createRuntime({ scan: () => ({ "须臾树脂": 2, "脆弱树脂": 37 }) });
+    const physical = runtime.physical;
+    physical.countOriginalResin = async () => { throw new Error("obsolete map OCR"); };
+    physical.countOriginalResinBackup = async () => 120;
+    physical.countCondensedResin = async () => 3;
+    physical.openReplenishResinUi = async () => { throw new Error("wrong page"); };
+    const snapshot = await physical.countAllResin();
+    assert.deepEqual(JSON.parse(JSON.stringify(snapshot)), {
+        originalResinCount: 120, condensedResinCount: 3,
+        transientResinCount: 2, fragileResinCount: 37,
+    });
+    assert.equal(runtime.scans.length, 1);
+    assert.equal(runtime.scans[0].gridScreenName, "PreciousItems");
+    assert.deepEqual(Array.from(runtime.scans[0].itemNames), ["须臾树脂", "脆弱树脂"]);
+    assert.equal(runtime.scans[0].iconRecognitionMode, "Item");
+});
+
+test("missing or invalid inventory resin quantities remain unknown", async () => {
+    const runtime = await createRuntime({ scan: () => ({ "脆弱树脂": -2 }) });
+    runtime.physical.countOriginalResinBackup = async () => 120;
+    runtime.physical.countCondensedResin = async () => 3;
+    const snapshot = await runtime.physical.countAllResin();
+    assert.equal(snapshot.transientResinCount, -1);
+    assert.equal(snapshot.fragileResinCount, -1);
+});
+
+test("verified native inventory evidence carries confirmed absence without inventing missing zeroes", async () => {
+    for (const coverageComplete of [true, false]) {
+        const runtime = await createRuntime({scan: () => ({schema: "bgi.inventory-count.v1",
+            counts: {"脆弱树脂": 38, "须臾树脂": coverageComplete ? 0 : -1}, coverageComplete,
+            reason: coverageComplete ? "verified-top-to-bottom" : "page-overlap-not-unique"})});
+        runtime.physical.countOriginalResinBackup = async () => 120;
+        runtime.physical.countCondensedResin = async () => 3;
+        const result = await runtime.physical.countAllResin();
+        assert.equal(result.fragileResinCount, 38);
+        assert.equal(result.transientResinCount, coverageComplete ? 0 : -1);
+        assert.equal(runtime.scans[0].includeScanEvidence, true);
+    }
+});
+
+test("a resin snapshot belongs only to the immediately claimed action", async () => {
+    const action = { status: "ACTION", actionType: "DOMAIN", actionId: "domain-1", revision: 1,
+        materialName: "霜仙花", plan: { runType: "秘境", autoDomain: {} } };
+    const runtime = await createRuntime({nextActions: [
+        {status: "NEEDS_RESIN_SNAPSHOT"}, action, {...action, actionId: "domain-2"}, {status: "DONE"},
+    ]});
+    const snapshot = {originalResinCount: 120, condensedResinCount: 3, transientResinCount: 2, fragileResinCount: 37};
+    let scans = 0;
+    runtime.physical.countAllResin = async () => { scans++; return snapshot; };
+    const received = [];
+    runtime.handlers["秘境"].run = async (_, context) => { received.push(context); return {"霜仙花": 1}; };
+    await runtime.run();
+    assert.equal(scans, 1);
+    assert.deepEqual(JSON.parse(JSON.stringify(received[0].resinSnapshot)), snapshot);
+    assert.equal(received[1].resinSnapshot, null);
+    assert.doesNotMatch(runtime.claims[2], /originalResinCount/);
+});
+
+test("the real domain handler consumes a provided snapshot without another scan", async () => {
+    const runtime = await createRuntime();
+    runtime.physical.countAllResin = async () => { throw new Error("duplicate scan"); };
+    await runtime.handlers["秘境"].run({}, {resinSnapshot: {
+        originalResinCount: 120, condensedResinCount: 0, transientResinCount: -1, fragileResinCount: -1,
+    }});
+    assert.equal(runtime.events.filter(value => value === "domain").length, 1);
+});
+
+test("unknown selected resin cannot be reported as insufficient inventory", async () => {
+    const runtime = await createRuntime();
+    await assert.rejects(runtime.handlers["秘境"].run({}, {resinSnapshot: {
+        originalResinCount: -1, condensedResinCount: 0, transientResinCount: -1, fragileResinCount: -1,
+    }}), /树脂数量未确认/);
+    assert(!runtime.events.includes("domain"));
+});
+
+test("an ordinary resin scan failure is not immediately retried by the claimed domain", async () => {
+    const runtime = await createRuntime({nextActions: [
+        {status: "NEEDS_RESIN_SNAPSHOT"},
+        {status: "ACTION", actionType: "DOMAIN", actionId: "domain-failure", revision: 1,
+            materialName: "霜仙花", plan: {runType: "秘境", autoDomain: {}}},
+    ]});
+    let scans = 0;
+    runtime.physical.countAllResin = async () => { scans++; throw new Error("inventory interface unavailable"); };
+    await assert.rejects(runtime.run(), /树脂数量未确认/);
+    assert.equal(scans, 1);
+    assert.doesNotMatch(runtime.claims[1], /originalResinCount/);
+    assert(!runtime.events.includes("domain"));
+});
+
+test("inventory cancellation does not reopen the map or run final recovery", async () => {
+    let eventsBeforeCancellation;
+    const runtime = await createRuntime({resinVisible: true, scan: () => {
+        eventsBeforeCancellation = runtime.events.length;
+        throw new Error("OperationCanceledException");
+    }});
+    await assert.rejects(runtime.physical.countAllResin(), /OperationCanceledException/);
+    assert.equal(runtime.scans.length, 1);
+    assert.equal(runtime.events.filter(event => event === "key:M").length, 1);
+    assert.equal(runtime.events.length, eventsBeforeCancellation);
 });
 
 const bossAction = { status: "ACTION", actionType: "WORLD_BOSS", actionId: "boss-1", revision: 1,
     materialName: "蕈王钩喙", reconcileGrid: "CharacterDevelopmentItems", batchLimit: 1,
     plan: { runType: "Boss", autoBoss: { bossName: "翠翎恐蕈", combatStrategyPath: "", reviveRetryCount: 3 } } };
+
+test("new completed business cause permits one more inventory scan in the same run", async () => {
+    const runtime = await createRuntime({ nextActions: [
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "INITIAL" },
+        { ...bossAction },
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "ACTION:boss-1" },
+        { ...bossAction, actionId: "boss-2" },
+        { status: "COMPLETED" },
+    ] });
+    await runtime.run();
+    assert.equal(runtime.events.filter(event => event === "boss").length, 2);
+    assert.equal(runtime.submissions.filter(body => body.idempotencyKey === "boss-1:result").length, 1);
+    assert.equal(runtime.submissions.filter(body => body.idempotencyKey === "boss-2:result").length, 1);
+    assert.equal(runtime.outcomes[0].kind, "Completed");
+});
+
+for (const cause of [undefined, null, "", 4, {}, "untrusted", "ACTION:", "ACTION:boss-old"]) {
+    test(`same normalized cause cannot gain scan budget from revision or target changes: ${JSON.stringify(cause)}`, async () => {
+        const runtime = await createRuntime({ nextActions: [
+            { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: cause, revision: 1 },
+            { ...bossAction },
+            { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: cause, revision: 2, materialName: "new-target" },
+            { ...bossAction, actionId: "must-not-run" },
+        ] });
+        await runtime.run();
+        assert.equal(runtime.events.filter(event => event === "boss").length, 1);
+        assert.equal(runtime.claims.length, 3);
+        assert.equal(runtime.submissions.filter(body => typeof body.observedOwned === "object").length, 3,
+            "only start, one cause, and final scan; final success cannot rewrite the drive outcome");
+        assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+        assert.match(runtime.outcomes[0].reason, /ALREADY_ATTEMPTED/);
+    });
+}
+
+test("an unresolved cause scan does not refund the attempt or claim another action", async () => {
+    const runtime = await createRuntime({ observationStatus: "NEEDS_RECONCILE", nextActions: [
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "ACTION:known" }, { ...bossAction },
+    ] });
+    await runtime.run();
+    assert.equal(runtime.claims.length, 1);
+    assert(!runtime.events.includes("boss"));
+    assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+});
+
+test("one post-scan claim that stays blocked cannot start another cause loop", async () => {
+    const runtime = await createRuntime({ nextActions: [
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "INITIAL" },
+        { status: "PLAN_NEEDS_RECONCILE", inventoryReconcileCause: "ACTION:new" }, { ...bossAction },
+    ] });
+    await runtime.run();
+    assert.equal(runtime.claims.length, 2);
+    assert(!runtime.events.includes("boss"));
+    assert.equal(runtime.outcomes[0].kind, "NeedsReconcile");
+});
 
 test("a terminal boss exit does not teleport in finally or open inventory afterward", async () => {
     const runtime = await createRuntime({ nextActions: [bossAction],

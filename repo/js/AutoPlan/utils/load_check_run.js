@@ -283,7 +283,7 @@ class Domain extends Base {
         partyName: undefined,//队伍名称
         sundaySelectedValue: 1,//周日|限时选择的值，默认为1
         domainRoundNum: 0,//副本轮数，默认为0
-    }) {
+    }, executionContext = {}) {
         Log.info(`{0}`, "开始执行秘境任务")
         Log.warn(`{0}`, "非体力耗尽情况下(受本体限制),等待退出秘境时间较长")
         Log.debug(`Object:{0}`,JSON.stringify(autoDomain))
@@ -338,11 +338,17 @@ class Domain extends Base {
         //   fragileResinUseCount: number;
         await sleep(1000)
 
-        const currentPhysical = await Physical.countAllResin()
+        const currentPhysical = executionContext.resinSnapshot ?? await Physical.countAllResin()
         config.user.physical.currentJson = currentPhysical;
         config.user.physical.current = currentPhysical.originalResinCount;
 
         const physical = config.user.physical
+        const rawResinCounts = new Map([
+            ["原粹树脂", currentPhysical.originalResinCount],
+            ["浓缩树脂", currentPhysical.condensedResinCount],
+            ["须臾树脂", currentPhysical.transientResinCount],
+            ["脆弱树脂", currentPhysical.fragileResinCount],
+        ])
         const resinAvailableCounts = new Map([
             ["原粹树脂", Number(currentPhysical.originalResinCount) >= physical.min ? 1 : 0],
             ["浓缩树脂", Number(currentPhysical.condensedResinCount) || 0],
@@ -353,6 +359,12 @@ class Domain extends Base {
             normalizeResinUseCount(item) > 0
             && (resinAvailableCounts.get(item?.name?.trim()) ?? 0) > 0)
         if (domainParam.SpecifyResinUse && !hasUsableSelectedResin) {
+            const hasUnknownSelectedResin = physical_domain.some(item => {
+                const count = rawResinCounts.get(item?.name?.trim());
+                return normalizeResinUseCount(item) > 0
+                    && (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0);
+            });
+            if (hasUnknownSelectedResin) throw new Error("已启用的树脂数量未确认，不能判定库存不足");
             Log.warn(`已启用的树脂均不足，本轮不进入秘境`)
             return {}
         }
@@ -432,14 +444,14 @@ class LeyLineOutcrop extends Base {
         json.key = json.key +
             "|" + auto.country +
             "|" + auto.leyLineOutcropType +
-            "|" + auto.useAdventurerHandbook +
+            //"|" + auto.useAdventurerHandbook +
             "|" + auto.friendshipTeam +
             "|" + auto.team +
             "|" + auto.timeout +
             "|" + auto.isGoToSynthesizer +
             "|" + auto.useFragileResin +
-            "|" + auto.useTransientResin +
-            "|" + auto.isNotification
+            "|" + auto.useTransientResin
+            //+ "|" + auto.isNotification
         return json
     }
 
@@ -461,14 +473,14 @@ class LeyLineOutcrop extends Base {
             count: 0,                        // 刷几次（0=自动/无限）
             country: undefined,                     // 国家地区
             leyLineOutcropType: undefined, // 需映射为经验/摩拉
-            useAdventurerHandbook: false,    // 是否使用冒险之证
+            //useAdventurerHandbook: false,    // 是否使用冒险之证
             friendshipTeam: "",              // 好感队伍ID
             team: "",                        // 主队伍ID
             timeout: 120,                      // 超时时间（秒）
             isGoToSynthesizer: false,        // 是否前往合成台
             useFragileResin: false,          // 使用脆弱树脂
             useTransientResin: false,        // 使用须臾树脂（须臾=Transient）
-            isNotification: false            // 是否通知
+            //isNotification: false            // 是否通知
         }
         autoLeyLineOutcrop.team = arr[index]
         index++
@@ -490,12 +502,12 @@ class LeyLineOutcrop extends Base {
         index++
         if (index <= arr.length - 1)
             autoLeyLineOutcrop.isGoToSynthesizer = (arr[index] != null && arr[index].trim() !== "")
-        index++
-        if (index <= arr.length - 1)
-            autoLeyLineOutcrop.useAdventurerHandbook = (arr[index] != null && arr[index].trim() !== "")
-        index++
-        if (index <= arr.length - 1)
-            autoLeyLineOutcrop.isNotification = (arr[index] != null && arr[index].trim() !== "")
+        // index++
+        // if (index <= arr.length - 1)
+        //     autoLeyLineOutcrop.useAdventurerHandbook = (arr[index] != null && arr[index].trim() !== "")
+        // index++
+        // if (index <= arr.length - 1)
+        //     autoLeyLineOutcrop.isNotification = (arr[index] != null && arr[index].trim() !== "")
 
         index++
         if (index <= arr.length - 1)
@@ -507,14 +519,14 @@ class LeyLineOutcrop extends Base {
         count: 0,                        // 刷几次（0=自动/无限）
         country: undefined,                     // 国家地区
         leyLineOutcropType: undefined, // 需映射为经验/摩拉
-        useAdventurerHandbook: false,    // 是否使用冒险之证
+        //useAdventurerHandbook: false,    // 是否使用冒险之证
         friendshipTeam: "",              // 好感队伍ID
         team: "",                        // 主队伍ID
         timeout: 120,                      // 超时时间（秒）
         isGoToSynthesizer: false,        // 是否前往合成台
         useFragileResin: false,          // 使用脆弱树脂
         useTransientResin: false,        // 使用须臾树脂（须臾=Transient）
-        isNotification: false            // 是否通知
+        //isNotification: false            // 是否通知
     }) {
         // autoLeyLineOutcrop = {
         //     "count": 0,
@@ -537,14 +549,14 @@ class LeyLineOutcrop extends Base {
         Log.debug(`Object:{0}`,JSON.stringify(autoLeyLineOutcrop))
         let param = new AutoLeyLineOutcropParam(parseInteger(autoLeyLineOutcrop.count + ""), autoLeyLineOutcrop.country, autoLeyLineOutcrop.leyLineOutcropType);
         //和本体保持一致
-        param.useAdventurerHandbook = !autoLeyLineOutcrop.useAdventurerHandbook;
+        //param.useAdventurerHandbook = !autoLeyLineOutcrop.useAdventurerHandbook;
         param.friendshipTeam = autoLeyLineOutcrop.friendshipTeam;
         param.team = autoLeyLineOutcrop.team;
         param.timeout = autoLeyLineOutcrop.timeout;
         param.isGoToSynthesizer = autoLeyLineOutcrop.isGoToSynthesizer;
         param.useFragileResin = autoLeyLineOutcrop.useFragileResin;
         param.useTransientResin = autoLeyLineOutcrop.useTransientResin;
-        param.isNotification = autoLeyLineOutcrop.isNotification;
+        //param.isNotification = autoLeyLineOutcrop.isNotification;
 
         param.isResinExhaustionMode = true;
         param.openModeCountMin = true;
@@ -990,6 +1002,7 @@ class Boss extends Base {
             // }
         } catch (error) {
             terminalExit = isTerminalTaskError(error);
+            Log.error(`{0}`, error.message);
             throw error;
         } finally {
             if (!terminalExit) await genshin.tpToStatueOfTheSeven();
@@ -1030,10 +1043,10 @@ export const taskHandlerMap = {
 /**
  * 根据不同的加载方式加载秘境配置
  * @param {string} Load - 加载方式类型，如uid或input
- * @param {Set} autoOrderSet - 用于存储秘境顺序的Set集合
+ * @param {Set} auto_plan_set - 用于存储体力计划顺序的Set集合
  * @param {string} runConfig - 输入的配置字符串，仅在Load为input时使用
  */
-export async function loadMode(Load, autoOrderSet, runConfig) {
+export async function loadMode(Load, auto_plan_set, runConfig) {
     switch (Load) {
         case LoadType.input:
             // 通过输入字符串方式加载配置
@@ -1055,7 +1068,7 @@ export async function loadMode(Load, autoOrderSet, runConfig) {
                         }
 
                         // 将秘境顺序对象添加到列表中
-                        autoOrderSet.add(autoOrder)
+                        auto_plan_set.add(autoOrder)
                     }
                 )
             }
@@ -1075,7 +1088,7 @@ export async function loadMode(Load, autoOrderSet, runConfig) {
                     if (item.days && item.days.length > 0) {
                         item.days = item.days.map(day => parseInteger(day))
                     }
-                    autoOrderSet.add(item)
+                    auto_plan_set.add(item)
                 })
             }
             break
@@ -1090,7 +1103,7 @@ export async function loadMode(Load, autoOrderSet, runConfig) {
                     if (item.days && item.days.length > 0) {
                         item.days = item.days.map(day => parseInteger(day))
                     }
-                    autoOrderSet.add(item)
+                    auto_plan_set.add(item)
                 })
             }
             break
@@ -1106,7 +1119,7 @@ export async function loadMode(Load, autoOrderSet, runConfig) {
  * @returns {Array} 返回处理后的秘境顺序列表
  */
 export async function initRunOrderList(domainConfig) {
-    const autoFightOrderSet = new Set() // 存储秘境顺序列表的数组
+    const auto_plan_set = new Set() // 存储秘境顺序列表的数组
     /*    let te = {
             order: 1,      // 顺序值
             day: 0,// 执行日期
@@ -1119,18 +1132,18 @@ export async function initRunOrderList(domainConfig) {
         }*/
 
     for (const Load of config.run.loads) {
-        await loadMode(Load.load, autoFightOrderSet, domainConfig);
+        await loadMode(Load.load, auto_plan_set, domainConfig);
     }
 
     // 检查是否已配置秘境
-    if (!autoFightOrderSet || autoFightOrderSet.size <= 0) {
+    if (!auto_plan_set || auto_plan_set.size <= 0) {
         throw new Error("请先配置体力配置");
     }
     // 返回处理后的秘境顺序列表
-    let from = Array.from(autoFightOrderSet);
+    let auto_plan_list = Array.from(auto_plan_set);
     let dayOfWeek = await getDayOfWeek();
-    Log.debug(`old-from:{0}`, JSON.stringify(from))
-    from = from
+    Log.debug(`old==>auto_plan_list:{0}`, JSON.stringify(auto_plan_list))
+    auto_plan_list = auto_plan_list
         //过滤掉不执行的秘境
         .filter(item => config.user.runTypes.includes(item.runType))
         .filter(item => {
@@ -1142,7 +1155,7 @@ export async function initRunOrderList(domainConfig) {
             }
             return true
         })
-    from.sort((a, b) => {
+    auto_plan_list.sort((a, b) => {
         // 将 cultivate 转换为数值，true 为 1，false 为 0
         let cultivateA = (a?.cultivate || false) ? 1 : 0;
         let cultivateB = (b?.cultivate || false) ? 1 : 0;
@@ -1153,8 +1166,8 @@ export async function initRunOrderList(domainConfig) {
         // 当 cultivate 相同时，按 order 降序排列
         return b.order - a.order
     })
-    Log.debug(`from:{0}`, JSON.stringify(from))
-    return from;
+    Log.debug(`auto_plan_list:{0}`, JSON.stringify(auto_plan_list))
+    return auto_plan_list;
 }
 
 /**
