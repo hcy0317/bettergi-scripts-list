@@ -6,13 +6,13 @@
         "links": "https://github.com/cheese-bagel"
       }
     ],
-    "bgi_version": "0.50.0",
+    "bgi_version": "0.52.0",
     "description": "",
     "enable_monster_loot_split": false,
-    "last_modified_time": 1758427550229,
+    "last_modified_time": 1757901752914,
     "map_match_method": "",
     "map_name": "Teyvat",
-    "name": "11-沐光之台-4个",
+    "name": "01-那夏镇下方-4个",
     "tags": [],
     "type": "collect",
     "version": "1.0"
@@ -22,10 +22,10 @@
       "action": "",
       "action_params": "",
       "id": 1,
-      "move_mode": "walk",
+      "move_mode": "dash",
       "type": "teleport",
-      "x": 10524.5908,
-      "y": 1931.3853
+      "x": 9367.1484,
+      "y": 1435.6118
     },
     {
       "action": "",
@@ -33,17 +33,17 @@
       "id": 2,
       "move_mode": "dash",
       "type": "path",
-      "x": 10510.9316,
-      "y": 1940.0376
+      "x": 9378.5215,
+      "y": 1423.5244
     },
     {
       "action": "",
       "action_params": "",
       "id": 3,
-      "move_mode": "run",
+      "move_mode": "dash",
       "type": "path",
-      "x": 10445.5762,
-      "y": 1966.4956
+      "x": 9403.4238,
+      "y": 1439.2847
     },
     {
       "action": "",
@@ -51,89 +51,89 @@
       "id": 4,
       "move_mode": "dash",
       "type": "path",
-      "x": 10443.3672,
-      "y": 1971.7285
+      "x": 9405.8457,
+      "y": 1449.9541
     },
     {
       "action": "",
       "action_params": "",
       "id": 5,
-      "move_mode": "dash",
+      "move_mode": "run",
       "type": "path",
-      "x": 10454.1719,
-      "y": 1996.2061
-    },
-    {
-      "action": "mining",
-      "action_params": "",
-      "id": 6,
-      "move_mode": "walk",
-      "type": "target",
-      "x": 10456.3311,
-      "y": 1997.6523
+      "x": 9475.0625,
+      "y": 1457.1997
     },
     {
       "action": "",
+      "action_params": "",
+      "id": 6,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 9519.2305,
+      "y": 1485.4199
+    },
+    {
+      "action": "mining",
       "action_params": "",
       "id": 7,
       "move_mode": "walk",
-      "type": "path",
-      "x": 10458.5215,
-      "y": 1995.6455
+      "type": "target",
+      "x": 9521.7383,
+      "y": 1487.5181
     },
     {
-      "action": "mining",
+      "action": "",
       "action_params": "",
       "id": 8,
-      "move_mode": "walk",
-      "type": "target",
-      "x": 10459.2891,
-      "y": 1997.4102
-    },
-    {
-      "action": "",
-      "action_params": "",
-      "id": 9,
       "move_mode": "jump",
       "type": "path",
-      "x": 10457.252,
-      "y": 2000.0625
+      "x": 9517.9004,
+      "y": 1482.5615
     },
     {
       "action": "mining",
       "action_params": "",
-      "id": 10,
+      "id": 9,
       "move_mode": "walk",
       "type": "target",
-      "x": 10460.6504,
-      "y": 1999.8262
+      "x": 9529.5781,
+      "y": 1478.4077
     },
     {
       "action": "",
+      "action_params": "",
+      "id": 10,
+      "move_mode": "jump",
+      "type": "path",
+      "x": 9528.084,
+      "y": 1473.686
+    },
+    {
+      "action": "mining",
       "action_params": "",
       "id": 11,
       "move_mode": "walk",
-      "type": "path",
-      "x": 10458.3691,
-      "y": 2000.7427
+      "type": "target",
+      "x": 9532.0527,
+      "y": 1473.7197
     },
     {
       "action": "",
       "action_params": "",
       "id": 12,
       "move_mode": "walk",
-      "type": "target",
-      "x": 10460.1504,
-      "y": 2001.647
+      "type": "path",
+      "x": 9530.3613,
+      "y": 1469.4551
     },
     {
-      "action": "",
+      "action": "mining",
       "action_params": "",
       "id": 13,
-      "move_mode": "jump",
-      "type": "path",
-      "x": 10461.0566,
-      "y": 2003.604
+      "move_mode": "walk",
+      "type": "target",
+      "x": 9533.4297,
+      "y": 1471.3359
     }
   ]
 }
