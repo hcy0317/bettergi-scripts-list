@@ -7,9 +7,9 @@
       }
     ],
     "bgi_version": "0.64.0",
-    "description": "北国银行门口3人",
+    "description": "北国银行门口3人\n伊兹麦洛夫,卡列林,尤洛娃",
     "enable_monster_loot_split": false,
-    "last_modified_time": 1788355062407,
+    "last_modified_time": 1790488200371,
     "map_match_method": "SIFT",
     "map_name": "Teyvat",
     "name": "01-冰造物点赞-至冬-北国银行门口-6赞",
