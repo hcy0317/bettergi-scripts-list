@@ -365,7 +365,7 @@
     },
     "钟离": {
         "weapon": "长柄武器",
-        "script": "e(hold),q,attack(1.2)"
+        "script": "e(hold),q(optional),attack(1.2)"
     },
     "罗莎莉亚": {
         "weapon": "长柄武器",
