@@ -32,9 +32,15 @@ function isCommissionNameText(ocrText, commissionName) {
     return cleanText(standardizeCommissionName(cleanedOcr)) === cleanedCommissionName;
 }
 
-export function readTrackedDescriptionText(context) {
-    const firstLine = bvPageOcrRegionText(OCR_REGIONS.COMMISSION_DETAIL);
-    const secondLine = bvPageOcrRegionText(OCR_REGIONS.COMMISSION_DETAIL_SECOND_LINE);
+export function readTrackedDescriptionText(context, capture = null) {
+    const read = rect => {
+        if (!capture) return bvPageOcrRegionText(rect);
+        const area = capture.DeriveCrop(rect.X, rect.Y, rect.Width, rect.Height);
+        try { return String(area.find(RecognitionObject.ocrThis)?.text || "").trim(); }
+        finally { area.Dispose(); }
+    };
+    const firstLine = read(OCR_REGIONS.COMMISSION_DETAIL);
+    const secondLine = read(OCR_REGIONS.COMMISSION_DETAIL_SECOND_LINE);
 
     if (isCommissionNameText(firstLine, context.commissionName)) {
         log.debug("第一行仍为委托名称，使用第二行描述: {result}", secondLine);

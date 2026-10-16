@@ -617,6 +617,13 @@ declare const notification: {
  * 任务调度器
  */
 declare const dispatcher: {
+  /** 外部进度会话协议。必须在任何输入之前探测；同版本旧构建也不可回退。 */
+  readCombatSessionProtocol(): "bgi.external-combat.v1";
+  ReadCombatSessionProtocol: typeof dispatcher.readCombatSessionProtocol;
+  /** 起点必须来自实际截图，initialCount < total，total为1或2；总预算不超过30000ms。 */
+  createCombatSession(script: string, targetId: string, initialSource: CaptureFrameStamp,
+    initialCount: number, total: number, timeoutMilliseconds?: number): CombatSessionHandle;
+  CreateCombatSession: typeof dispatcher.createCombatSession;
   /**
    * 添加实时任务（会清理之前的所有任务）
    * @param timer 实时任务触发器
@@ -707,6 +714,53 @@ declare const dispatcher: {
 };
 
 // ==================== 类型定义 ====================
+
+/** 捕获源签发的只读值；不能用JS时间或自增计数冒充实际源帧。保留原生对象传给submitProgress。 */
+interface CaptureFrameStamp {
+  readonly IsKnown: boolean;
+  readonly isKnown: boolean;
+  readonly SessionId: { ToString(): string };
+  readonly sessionId: CaptureFrameStamp["SessionId"];
+  readonly Sequence: number;
+  readonly sequence: number;
+  readonly CapturedTimestamp: number;
+  readonly capturedTimestamp: number;
+  readonly TimestampFrequency: number;
+  readonly timestampFrequency: number;
+  readonly CapturedAt: { ToUnixTimeMilliseconds(): number; toUnixTimeMilliseconds(): number };
+  readonly capturedAt: CaptureFrameStamp["CapturedAt"];
+  IsAfter(earlier: CaptureFrameStamp): boolean;
+  isAfter(earlier: CaptureFrameStamp): boolean;
+}
+
+interface CombatSessionResult {
+  readonly Status: "CompletedByExternalProgress" | "Cancelled" | "TimedOut" | "Failed" | "EvidenceUnavailable";
+  readonly status: CombatSessionResult["Status"];
+  readonly Reason: string;
+  readonly reason: string;
+  readonly SessionId: string;
+  readonly sessionId: string;
+  readonly BattleId: string;
+  readonly battleId: string;
+}
+
+/** 没有输入owner能力。成功结果只在runner退出、输入释放及CTS清理后可见。 */
+interface CombatSessionHandle {
+  readonly SessionId: string;
+  readonly sessionId: string;
+  readonly TargetId: string;
+  readonly targetId: string;
+  readonly IsCompleted: boolean;
+  readonly isCompleted: boolean;
+  SubmitProgress(sessionId: string, targetId: string, source: CaptureFrameStamp, current: number, total: number, completed: boolean): boolean;
+  submitProgress: CombatSessionHandle["SubmitProgress"];
+  Cancel(): void;
+  cancel(): void;
+  WaitAsync(): Promise<CombatSessionResult>;
+  waitAsync(): Promise<CombatSessionResult>;
+  DisposeAsync(): Promise<void>;
+  disposeAsync(): Promise<void>;
+}
 
 /**
  * 实时任务触发器
@@ -3282,6 +3336,8 @@ declare class GameCaptureRegion extends ImageRegion {
  * 图像区域
  */
 declare class ImageRegion extends Region {
+  readonly FrameStamp: CaptureFrameStamp;
+  readonly frameStamp: CaptureFrameStamp;
   /** 源图像矩阵 */
   readonly srcMat: Mat;
 

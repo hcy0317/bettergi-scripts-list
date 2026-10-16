@@ -3,11 +3,9 @@
  */
 import { PATHS } from "../config/index.js";
 import { RO } from "../vision/index.js";
-import { bvPageOcrRegionText } from "../vision/ocr-utils.js";
 import { defineStep } from "./define-step.js";
 import { isCancellationError } from "../utils/error-utils.js";
 import { readTrackedDescriptionText } from "./commission-desc-utils.js";
-import { retireScopedTask } from "../utils/async-task-retirement.js";
 
 const WATCHTOWER_CONFIG = {
     /** 单次执行最多摧毁的哨塔数量；攀高危险最多两个，之后的任务图标可能属于其他委托。 */
@@ -22,8 +20,6 @@ const WATCHTOWER_CONFIG = {
     attackTimeout: 30 * 1000,
     /** 战斗期间 OCR 轮询间隔（毫秒）。 */
     statusPollInterval: 200,
-    /** 主动取消简易策略后的最长退出等待时间（毫秒）。 */
-    combatCancelTimeout: 10 * 1000,
     /** 单次前进时长（毫秒）：视角对准图标后按住 W 前进的时间。 */
     forwardMs: 600,
     /** 与乐流奔引一致的“委托完成”提示区域。 */
@@ -86,29 +82,60 @@ export function parseWatchtowerProgress(text) {
         .replace(/\s/g, "")
         .replace(/[oO]/g, "0")
         .replace(/[|\\]/g, "/");
-    const match = normalized.match(/丘丘人哨塔.*?(\d+)\/(\d+)/);
+    const match = normalized.match(/丘丘人哨塔[:：]?[（(]?(\d+)\/(\d+)(?!\d)/);
     if (!match) return null;
-    return { current: Number(match[1]), total: Number(match[2]) };
+    const current = Number(match[1]), total = Number(match[2]);
+    return Number.isInteger(current) && Number.isInteger(total) && total >= 1 && total <= 2 && current <= total
+        ? { current, total } : null;
 }
 
 function readDestroyStatus(context) {
-    let descriptionText = "";
-    let completionText = "";
+    const capture = captureGameRegion();
     try {
-        descriptionText = readTrackedDescriptionText(context);
-        completionText = bvPageOcrRegionText(WATCHTOWER_CONFIG.completionRegion);
-        log.debug("摧毁哨塔委托描述 OCR: {text}", descriptionText);
-        log.debug("摧毁哨塔委托完成 OCR: {text}", completionText);
+        const descriptionText = readTrackedDescriptionText(context, capture);
+        const rect = WATCHTOWER_CONFIG.completionRegion;
+        const area = capture.DeriveCrop(rect.X, rect.Y, rect.Width, rect.Height);
+        let completionText;
+        try { completionText = String(area.find(RecognitionObject.ocrThis)?.text || "").trim(); }
+        finally { area.Dispose(); }
+        return {
+            source: capture.FrameStamp,
+            progress: parseWatchtowerProgress(descriptionText),
+            completed: completionText.includes("委托完成"),
+        };
     } catch (error) {
         if (isCancellationError(error)) throw error;
         log.debug("摧毁哨塔状态 OCR 失败: {error}", error.message);
+        return { source: capture.FrameStamp, progress: null, completed: false };
+    } finally { capture.Dispose(); }
+}
+
+async function readInitialStatus(context) {
+    let previous = null;
+    // A single low OCR baseline would turn the old count into false progress later.
+    // Bound acquisition by sample count as well as source freshness; misses do not renew it.
+    for (let sample = 0; sample < 16; sample++) {
+        const current = readDestroyStatus(context);
+        const capturedAt = Number(current.source?.CapturedAt?.ToUnixTimeMilliseconds());
+        const age = Date.now() - capturedAt;
+        const fresh = current.source?.IsKnown && age >= 0 && age <= 1000;
+        if (fresh && previous) {
+            const previousAt = Number(previous.source.CapturedAt.ToUnixTimeMilliseconds());
+            const previousAge = Date.now() - previousAt;
+            const sameProgress = previous.progress && current.progress &&
+                previous.progress.current === current.progress.current && previous.progress.total === current.progress.total;
+            const sameCompletion = previous.completed && current.completed;
+            if (current.source.IsAfter(previous.source) && capturedAt - previousAt >= WATCHTOWER_CONFIG.statusPollInterval &&
+                previousAge >= 0 && previousAge <= 1000 && (sameProgress || sameCompletion)) {
+                current.confirmedBaseline = !!sameProgress;
+                current.confirmedComplete = !!(sameCompletion || sameProgress && current.progress.current === current.progress.total);
+                return current;
+            }
+        }
+        previous = fresh ? current : null;
+        if (sample < 15) await sleep(WATCHTOWER_CONFIG.statusPollInterval);
     }
-    return {
-        progress: parseWatchtowerProgress(descriptionText),
-        completed: completionText.includes("委托完成"),
-        descriptionText,
-        completionText,
-    };
+    throw new Error("BGI_COMBAT_EVIDENCE_UNAVAILABLE: 哨塔起点进度未取得双新帧稳定证据，不启动战斗");
 }
 
 /**
@@ -329,106 +356,45 @@ function loadCurrentTeamStrategies() {
     return [...shieldStrategies, ...otherStrategies];
 }
 
-/**
- * 启动持续循环的简易策略，调用方通过独立 CTS 控制退出。
- * @param {string} fullScript - 已按护盾优先顺序排列的完整策略
- * @param {number} strategyCount - 策略行数量
- * @returns {{cts: Object, state: {settled: boolean, error: Error|null, intentionalCancel: boolean}, task: Promise<void>}}
- */
-function createCombatLoop(fullScript, strategyCount) {
-    const cts = dispatcher.GetLinkedCancellationTokenSource();
-    const state = { settled: false, error: null, intentionalCancel: false };
-    const task = (async () => {
-        try {
-            while (!cts.Token.IsCancellationRequested) {
-                log.info("执行一轮哨塔简易策略，共 {count} 行", strategyCount);
-                await dispatcher.RunCombatScript(fullScript, null, cts.Token);
-                await sleep(1);
-            }
-        } catch (error) {
-            state.error = error;
-        } finally {
-            state.settled = true;
-        }
-    })();
-    return { cts, state, task };
-}
-
-/**
- * 主动取消简易策略循环并等待完全退出。
- * @param {{cts: Object, state: Object, task: Promise<void>}} combat - 当前战斗句柄
- * @returns {Promise<void>}
- */
-async function stopCombatLoop(combat) {
-    combat.state.intentionalCancel = true;
-    combat.cts.Cancel();
-    const completed = await dispatcher.waitForTask(combat.task, WATCHTOWER_CONFIG.combatCancelTimeout);
-    if (!completed) {
-        throw new Error(`取消哨塔简易策略超过 ${WATCHTOWER_CONFIG.combatCancelTimeout / 1000} 秒仍未退出`);
-    }
-    if (combat.state.error && !isCancellationError(combat.state.error)) {
-        throw combat.state.error;
+function requireCombatSessionProtocol() {
+    if (typeof dispatcher.ReadCombatSessionProtocol !== "function" ||
+        dispatcher.ReadCombatSessionProtocol() !== "bgi.external-combat.v1" ||
+        typeof dispatcher.CreateCombatSession !== "function") {
+        throw new Error("当前 BetterGI 不支持外部进度持续战斗会话，请升级到含该能力的构建；不会回退旧循环");
     }
 }
 
-/**
- * 检查简易策略是否在非主动取消的情况下提前结束。
- * @param {{cts: Object, state: {settled: boolean, error: Error|null, intentionalCancel: boolean}}} combat - 当前战斗句柄
- * @returns {void}
- */
-function assertCombatLoopRunning(combat) {
-    if (!combat.state.settled || combat.state.intentionalCancel) return;
-    if (combat.state.error) throw combat.state.error;
-    if (combat.cts.Token.IsCancellationRequested) throw new Error("取消自动任务");
-    throw new Error("哨塔简易策略在进度更新前意外结束");
-}
-
-/**
- * 并行执行简易策略与状态 OCR，直到摧毁数量增加、委托完成或软超时。
- * @param {number|null} initialCount - 开始攻击前识别到的已摧毁数量
- * @param {string[]} strategies - 当前队伍匹配到的策略行
- * @param {Object} context - 当前委托执行上下文
- * @returns {Promise<string>} 攻击结束原因
- */
-async function attackUntilDestroyed(initialCount, strategies, context) {
-    const startTime = Date.now();
-    const fullScript = strategies.join("\n");
-    const combat = createCombatLoop(fullScript, strategies.length);
-    let result = null;
+/** 同一个哨塔只创建一次会话；监测循环只提交带原始源帧身份的数据，不发送键鼠。 */
+async function attackUntilDestroyed(initial, strategies, context, targetId) {
+    if (!initial.confirmedBaseline || !initial.source?.IsKnown || !initial.progress || initial.progress.current >= initial.progress.total) {
+        throw new Error("BGI_COMBAT_EVIDENCE_UNAVAILABLE: 未确认本哨塔起点进度，不启动战斗");
+    }
+    const combat = dispatcher.CreateCombatSession(strategies.join("\n"), targetId, initial.source,
+        initial.progress.current, initial.progress.total, WATCHTOWER_CONFIG.attackTimeout);
+    log.debug("WATCHTOWER_SESSION source=AutoCommissionNova/basic-destroy-watchtower session={session} target={target}",
+        combat.SessionId, combat.TargetId);
     let failure = null;
     try {
-        while (result === null) {
-            assertCombatLoopRunning(combat);
+        while (!combat.IsCompleted) {
             const status = readDestroyStatus(context);
-            if (status.completed) {
-                log.info("识别到委托完成文本: {text}", status.completionText);
-                result = ATTACK_RESULT.COMPLETED;
-                break;
-            }
-            if (status.progress && status.progress.current >= status.progress.total) {
-                log.info("哨塔摧毁进度已完成: {current}/{total}", status.progress.current, status.progress.total);
-                result = ATTACK_RESULT.COMPLETED;
-                break;
-            }
-            if (status.progress && initialCount !== null && status.progress.current > initialCount) {
-                log.info("哨塔摧毁进度已更新: {current}/{total}", status.progress.current, status.progress.total);
-                result = ATTACK_RESULT.PROGRESS;
-                break;
-            }
-            if (Date.now() - startTime >= WATCHTOWER_CONFIG.attackTimeout) {
-                log.warn("攻击哨塔超过 {seconds} 秒，判定软超时", WATCHTOWER_CONFIG.attackTimeout / 1000);
-                result = ATTACK_RESULT.TIMEOUT;
-                break;
-            }
-            await sleep(WATCHTOWER_CONFIG.statusPollInterval);
+            combat.SubmitProgress(combat.SessionId, combat.TargetId, status.source,
+                status.progress ? status.progress.current : -1,
+                status.progress ? status.progress.total : initial.progress.total, status.completed);
+            if (!combat.IsCompleted) await sleep(WATCHTOWER_CONFIG.statusPollInterval);
         }
-        await stopCombatLoop(combat);
-        return result;
-    } catch (error) {
-        failure = error;
-        throw error;
-    } finally {
-        await retireScopedTask(combat, failure);
+        const result = await combat.WaitAsync();
+        if (result.Status === "CompletedByExternalProgress")
+            return result.Reason === "commission-completed" ? ATTACK_RESULT.COMPLETED : ATTACK_RESULT.PROGRESS;
+        if (result.Status === "TimedOut") return ATTACK_RESULT.TIMEOUT;
+        if (result.Status === "Cancelled") throw new Error("取消自动任务");
+        throw new Error("BGI_COMBAT_SESSION_FAILED: " + result.Status + ": " + result.Reason);
+    } catch (error) { failure = error; throw error; }
+    finally {
+        try { await combat.DisposeAsync(); }
+        catch (cleanup) {
+            if (failure) throw new AggregateError([failure, cleanup], "哨塔监测与会话清理均失败");
+            throw cleanup;
+        }
     }
 }
 
@@ -469,24 +435,24 @@ async function destroyAllWatchtowers(options, context) {
         }
 
         const arrivedAt = Date.now();
-        const initialStatus = readDestroyStatus(context);
-        const statusMs = Date.now() - arrivedAt;
-        const initialCount = initialStatus.progress ? initialStatus.progress.current : null;
-        if (initialStatus.completed) return true;
-        if (initialStatus.progress && initialStatus.progress.current >= initialStatus.progress.total) return true;
+        // 路径可能改变队伍；先读取策略，再采集新鲜起点帧，不拿加载前的旧截图启动会话。
+        const strategyAt = Date.now();
+        const attackStrategies = loadCurrentTeamStrategies();
+        const strategyMs = Date.now() - strategyAt;
+        const statusAt = Date.now();
+        const initialStatus = await readInitialStatus(context);
+        const statusMs = Date.now() - statusAt;
+        if (initialStatus.confirmedComplete) return true;
         if (initialStatus.progress) {
             log.info("攻击前哨塔摧毁进度: {current}/{total}", initialStatus.progress.current, initialStatus.progress.total);
         } else {
-            log.warn("攻击前未识别到哨塔摧毁进度，将继续等待委托完成提示");
+            log.warn("攻击前未识别到哨塔起点进度，证据不足，不能启动会话");
         }
 
-        // 路径可能改变队伍；以到点后的当前队伍为准，不复用出发前名单。
-        const strategyAt = Date.now();
-        const attackStrategies = loadCurrentTeamStrategies();
         log.debug("WATCHTOWER_HANDOFF arrivalToCombatMs={total} statusMs={status} strategyMs={strategy}",
-            Date.now() - arrivedAt, statusMs, Date.now() - strategyAt);
+            Date.now() - arrivedAt, statusMs, strategyMs);
 
-        const attackResult = await attackUntilDestroyed(initialCount, attackStrategies, context);
+        const attackResult = await attackUntilDestroyed(initialStatus, attackStrategies, context, "watchtower-" + (processedCount + 1));
         if (attackResult === ATTACK_RESULT.COMPLETED) {
             return true;
         }
@@ -548,6 +514,7 @@ export default defineStep({
     },
     run: async (step, context) => {
         try {
+            requireCombatSessionProtocol(); // 在归位、路径或任何键鼠输入之前拒绝旧/不兼容构建。
             const options = resolveStepOptions(step);
             log.info("开始执行摧毁哨塔步骤，寻路方式: {navigation}", options.navigation);
 
