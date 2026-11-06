@@ -263,7 +263,7 @@ async function runGatherMode() {
     log.info("前往神像进行采集前的准备工作");
     await genshin.tpToStatueOfTheSeven();
     if (worldInfo === null) {
-        worldInfo = await getCoOpModeAndHostUid();
+        worldInfo = await getCoOpModeAndHostUid(!settings.manualSetAccountName);
     }
     if (worldInfo.coOpMode) {
         log.info("当前处于联机模式，不执行队伍切换");
@@ -1199,15 +1199,21 @@ function getSelectedMaterials(configMap) {
 /**
  * 获取世界主人的UID
  */
-async function getCoOpModeAndHostUid() {
+async function getCoOpModeAndHostUid(requireUid = true) {
     await genshin.returnMainUi();
     keyPress("F2");
     const multiplayerReady = await waitForTextAppear("多人游戏", [130, 20, 129, 57]);
     if (multiplayerReady?.success !== true) {
         throw new Error("未能确认多人游戏界面，停止读取UID");
     }
-    let uid = await getGameAccount(true, false);
+    const uidRequired = requireUid !== false;
+    let uid = uidRequired ? await getGameAccount(true, false) : null;
     const coOpMode = !(await isTextExistedInRegion("搜索", [1638, 90, 87, 63]));
+    if (!uidRequired) {
+        log.info(coOpMode ? "当前处于联机模式" : "当前处于单人模式");
+        await genshin.returnMainUi();
+        return { coOpMode: coOpMode, uid: null, maskUid: null };
+    }
     if (coOpMode) {
         const btnText = await getTextInRegion([1560, 992, 191, 55]);
         // 仅在多人模式且非房主时需要
