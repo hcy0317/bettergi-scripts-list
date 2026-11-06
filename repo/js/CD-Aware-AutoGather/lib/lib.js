@@ -438,22 +438,46 @@ async function getGameAccount(multiAccount = false, mask = true) {
     // await sleep(1000);
 
     const region = captureGameRegion();
-    const ocrResults = RecognitionObject.ocr(region.width * 0.75, region.height * 0.75, region.width * 0.25, region.height * 0.25);
-    const resList = region.findMulti(ocrResults);
-    region.dispose();
+    const roi = { x: region.width * 0.75, y: region.height * 0.75, width: region.width * 0.25, height: region.height * 0.25 };
+    const fragments = [];
+    try {
+        const resList = region.findMulti(RecognitionObject.ocr(roi.x, roi.y, roi.width, roi.height));
+        for (let i = 0; i < (resList.count ?? resList.Count ?? 0); i++) {
+            const item = resList[i];
+            const box = { x: item.x, y: item.y, width: item.width, height: item.height };
+            if (![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.width <= 0 || box.height <= 0) continue;
+            if (box.x < roi.x || box.y < roi.y || box.x + box.width > roi.x + roi.width || box.y + box.height > roi.y + roi.height) continue;
+            fragments.push({ text: String(item.text ?? "").trim(), ...box });
+        }
+    } finally {
+        region.dispose();
+    }
 
-    for (let i = 0; i < resList.count; i++) {
-        const text = resList[i].text;
-        if (text.includes("UID")) {
-            const match = text.match(/\d+/);
-            if (match) {
-                account = match[0];
-                if (mask) {
-                    // 避免完整UID出现在log中造成意外暴露
-                    account = account.replace(/\d*(\d{4})\d{4}/, (match, group1) => match.replace(group1, "xxxx"));
-                }
-            }
-            break;
+    const candidates = new Set();
+    let ambiguous = false;
+    for (const label of fragments) {
+        const combined = label.text.match(/^UID\s*[:：]?\s*([1-9]\d{8,9})$/i);
+        if (combined) {
+            candidates.add(combined[1]);
+            continue;
+        }
+        if (!/^UID\s*[:：]?$/i.test(label.text)) continue;
+        const adjacent = fragments.filter(value => {
+            if (!/^[1-9]\d{8,9}$/.test(value.text)) return false;
+            const height = Math.min(label.height, value.height);
+            const overlap = Math.min(label.y + label.height, value.y + value.height) - Math.max(label.y, value.y);
+            const gap = value.x - label.x - label.width;
+            return overlap >= height * 0.6 && gap >= 0 && gap <= Math.max(label.height, value.height) * 2;
+        });
+        const values = new Set(adjacent.map(value => value.text));
+        if (values.size > 1) ambiguous = true;
+        if (values.size === 1) candidates.add(adjacent[0].text);
+    }
+    if (!ambiguous && candidates.size === 1) {
+        account = candidates.values().next().value;
+        if (mask) {
+            // 避免完整UID出现在log中造成意外暴露
+            account = account.replace(/\d*(\d{4})\d{4}/, (match, group1) => match.replace(group1, "xxxx"));
         }
     }
 
