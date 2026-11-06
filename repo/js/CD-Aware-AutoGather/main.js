@@ -1202,7 +1202,10 @@ function getSelectedMaterials(configMap) {
 async function getCoOpModeAndHostUid() {
     await genshin.returnMainUi();
     keyPress("F2");
-    await waitForTextAppear("多人游戏", [130, 20, 129, 57]);
+    const multiplayerReady = await waitForTextAppear("多人游戏", [130, 20, 129, 57]);
+    if (multiplayerReady?.success !== true) {
+        throw new Error("未能确认多人游戏界面，停止读取UID");
+    }
     let uid = await getGameAccount(true, false);
     const coOpMode = !(await isTextExistedInRegion("搜索", [1638, 90, 87, 63]));
     if (coOpMode) {
@@ -1212,7 +1215,10 @@ async function getCoOpModeAndHostUid() {
             log.info("当前处于联机模式，且玩家不是房主");
             click(332, 218);
             await recognizeTextAndClick("查看资料", [555, 182, 118, 49]);
-            await waitForTextAppear("角色展柜", [1082, 204, 107, 49]);
+            const profileReady = await waitForTextAppear("角色展柜", [1082, 204, 107, 49]);
+            if (profileReady?.success !== true) {
+                throw new Error("未能确认房主角色展柜，停止读取UID");
+            }
             await sleep(100);
             uid = await getTextInRegion([623, 192, 118, 37]);
         } else {
@@ -1222,6 +1228,9 @@ async function getCoOpModeAndHostUid() {
         log.info("当前处于单人模式");
     }
     await genshin.returnMainUi();
+    if (!/^[1-9]\d{8,9}$/.test(uid)) {
+        throw new Error("未能确认世界主人UID");
+    }
     const maskUid = uid.replace(/\d\d(\d{3})\d{4}/, (match, group1) => match.replace(group1, "xxx"));
     return { coOpMode: coOpMode, uid: uid, maskUid: maskUid };
 }
