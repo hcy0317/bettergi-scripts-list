@@ -479,13 +479,14 @@ export class Physical {
             Physical.displayResults(resinCounts); // 显示统计结果
 
             Log.info("树脂统计完成"); // 记录完成统计的日志
-            return { // 返回包含各种树脂数量的对象
+            const snapshot = { // 旧客户端保持原四字段形状
                 originalResinCount: resinCounts.original, // 原粹树脂数量
                 condensedResinCount: resinCounts.condensed, // 浓缩树脂数量
                 transientResinCount: resinCounts.transient, // 须臾树脂数量
-                fragileResinCount: resinCounts.fragile, // 脆弱树脂数量
-                mapResinObservation // 仅数据来源；不得作为当前输入权限或缺失为零的证明
+                fragileResinCount: resinCounts.fragile // 脆弱树脂数量
             };
+            if (mapResinObservation != null) snapshot.mapResinObservation = mapResinObservation;
+            return snapshot;
 
         } catch (error) { // 捕获异常
             terminalExit = isTerminalTaskError(error);
