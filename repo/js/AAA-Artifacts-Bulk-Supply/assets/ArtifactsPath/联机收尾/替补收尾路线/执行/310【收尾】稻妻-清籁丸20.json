@@ -151,8 +151,8 @@
       "id": 16,
       "move_mode": "climb",
       "type": "target",
-      "x": -3776.0625,
-      "y": -4441.187444667303
+      "x": -3775.9785,
+      "y": -4441.1367
     },
     {
       "action": "combat_script",
@@ -160,8 +160,8 @@
       "id": 17,
       "move_mode": "climb",
       "type": "target",
-      "x": -3773.9287109375,
-      "y": -4441.794921875
+      "x": -3773.582,
+      "y": -4441.5469
     },
     {
       "action": "",
@@ -311,7 +311,7 @@
     },
     {
       "action": "combat_script",
-      "action_params": "keypress(f),wait(0.2),keypress(f);万叶 attack(0.08),keydown(E),wait(0.48),keyup(E),attack(0.2);琴 attack(0.08),keydown(E),wait(0.4),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,-3500),wait(1.8),keyup(E),wait(0.3),click(middle),wait(1);",
+      "action_params": "keypress(f),wait(0.2),keypress(f);万叶 attack(0.08),keydown(E),wait(0.47),keyup(E),attack(0.2);琴 attack(0.08),keydown(E),wait(0.4),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,-3500),wait(1.8),keyup(E),wait(0.3),click(middle),wait(1);",
       "id": 35,
       "move_mode": "climb",
       "type": "target",
@@ -492,7 +492,7 @@
     },
     {
       "action": "combat_script",
-      "action_params": "wait(0.2),keypress(x);万叶 attack(0.08),keydown(E),wait(0.48),keyup(E),attack(0.2),wait(1);琴 attack(0.08),keydown(E),wait(0.4),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,-3500),wait(1.8),keyup(E),wait(0.3),click(middle);",
+      "action_params": "wait(0.2),keypress(x);万叶 attack(0.08),keydown(E),wait(0.47),keyup(E),attack(0.2),wait(1);琴 attack(0.08),keydown(E),wait(0.4),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,0),wait(0.2),moveby(1000,-3500),wait(1.8),keyup(E),wait(0.3),click(middle);",
       "id": 56,
       "move_mode": "swim",
       "type": "target",
