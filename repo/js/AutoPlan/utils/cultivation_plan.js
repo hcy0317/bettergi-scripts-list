@@ -1,6 +1,18 @@
 import {taskHandlerMap} from "./load_check_run";
 import {Physical} from "./physical";
 
+/** 确认账户身份；native 的未知值 0 不能成为记录路径或 API 参数。 */
+export function requireCanonicalUid(value) {
+    if (typeof value !== "string" && !(typeof value === "number" && Number.isSafeInteger(value) && value > 0)) {
+        throw new Error("UID 未确认或格式非法，必须为6至12位数字");
+    }
+    const uid = typeof value === "string" ? value.trim() : String(value);
+    if (!/^[0-9]{6,12}$/.test(uid)) {
+        throw new Error("UID 未确认或格式非法，必须为6至12位数字");
+    }
+    return uid;
+}
+
 function isTerminalAutomationError(error) {
     if (!error) return false;
     if (typeof taskResult !== "undefined") taskResult.check();
@@ -228,8 +240,7 @@ async function reportResult(baseUrl, action, executorId, observedOwned, succeede
 
 async function reconcileInventoryCore(config, detail = {}) {
     const baseUrl = cultivationApiBase(config.bgi_tools.api.httpPullJsonConfig);
-    const uid = String(config.user.uid ?? "").trim();
-    if (!uid) throw new Error("库存复核模式缺少 UID");
+    const uid = requireCanonicalUid(config.user.uid);
     const executorId = `inventory-${uid}-${Date.now()}`;
     const targets = await requestJson(
         "POST", `${baseUrl}/execution/inventory-reconcile-targets?uid=${encodeURIComponent(uid)}`
@@ -486,8 +497,7 @@ async function executeCraftAction(baseUrl, action, executorId, config) {
 
 async function runPlanCore(config) {
     const baseUrl = cultivationApiBase(config.bgi_tools.api.httpPullJsonConfig);
-    const uid = String(config.user.uid ?? "").trim();
-    if (!uid) throw new Error("计划驱动模式缺少 UID");
+    const uid = requireCanonicalUid(config.user.uid);
     const executorId = `autoplan-${uid}-${Date.now()}`;
     config.run.exclude_run_exception = false;
     config.run.loop_plan = false;

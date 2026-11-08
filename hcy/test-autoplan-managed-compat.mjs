@@ -4,13 +4,17 @@ import vm from 'node:vm';
 import test from 'node:test';
 
 const source = readFileSync(new URL('../repo/js/AutoPlan/config/config.js', import.meta.url), 'utf8');
-async function runtime(settings) {
-  const events = [], logs = [];
+const canonicalPlanSource = readFileSync(new URL('../repo/js/AutoPlan/utils/cultivation_plan.js', import.meta.url), 'utf8');
+const taskTypesSource = readFileSync(new URL('../repo/js/AutoPlan/config/task_types.js', import.meta.url), 'utf8');
+const dummyUid = '123456789';
+async function runtime(settings, {nativeUid = async () => dummyUid} = {}) {
+  const events = [], logs = [], uidReads = [], requests = [];
   const manifest = {name:'fixture',version:'0.1.4',key:'current-revision',last_key:'previous-revision',
     settings_ui:'settings.json',authors:[{name:'fixture'}]};
   const context = vm.createContext({
     settings, log:Object.fromEntries(['debug','info','warn','error'].map(level=>[level,(...args)=>logs.push(args.join(' '))])),
-    genshin:{uid:async()=>{events.push('uid');return 'fixture-uid';}},
+    genshin:{uid:async()=>{events.push('uid');const value=await nativeUid();uidReads.push(value);return value;}},
+    http:{async request(method,url,body){requests.push({method,url,body});return {status_code:200,body:JSON.stringify({code:200,data:{status:'DONE'}})};}},
     file:{readTextSync(path){
       if(path==='manifest.json')return JSON.stringify(manifest);
       if(path==='settings.json')return '[]';
@@ -19,13 +23,30 @@ async function runtime(settings) {
     }},
   });
   const module = new vm.SourceTextModule(source,{context});
-  await module.link(()=>new vm.SyntheticModule(['toMainUi'],function(){
+  // Real canonical helper; these external adapters are unused by config initialization.
+  // The separate actual-graph runtime case verifies the complete config/plan/handler cycle.
+  const plan = new vm.SourceTextModule(canonicalPlanSource,{context});
+  const taskTypes = new vm.SourceTextModule(taskTypesSource,{context});
+  const tool = new vm.SyntheticModule(['toMainUi'],function(){
     this.setExport('toMainUi',async()=>events.push('main'));
-  },{context}));
+  },{context});
+  const handlers = new vm.SyntheticModule(['taskHandlerMap'],function(){
+    this.setExport('taskHandlerMap',{});
+  },{context});
+  const physical = new vm.SyntheticModule(['Physical'],function(){
+    this.setExport('Physical',class {});
+  },{context});
+  const dependencies = {'./task_types':taskTypes,'../utils/tool':tool,'../utils/cultivation_plan':plan,
+    './load_check_run':handlers,'./physical':physical};
+  function resolve(specifier) {
+    assert(Object.hasOwn(dependencies,specifier),'unexpected initialization dependency: '+specifier);
+    return dependencies[specifier];
+  }
+  await module.link(resolve);
   await module.evaluate();
   await module.namespace.buildInitConfigSettings();
   await module.namespace.initSettings();
-  return {api:module.namespace,events,logs};
+  return {api:module.namespace,events,logs,uidReads,requests};
 }
 
 test('generated cultivation entry accepts the exact previous revision without changing saved settings',async()=>{
@@ -81,4 +102,37 @@ test('inventory reconciliation uses the same isolated managed initialization',as
   assert.deepEqual(run.events,['main','uid']);
   assert.equal(run.api.config.bgi_tools.open.open_push,false);
   assert.deepEqual(Array.from(run.api.config.run.loads),[]);
+});
+
+test('native UID zero is rejected after good initialization premises before record path or plan requests',async()=>{
+  const settings={cultivation_plan_mode:true,key:'current-revision',
+    bgi_tools_http_pull_json_config:'http://local/auto/plan/json'};
+  const run=await runtime(settings,{nativeUid:async()=>0});
+  await run.api.checkKey(settings.key);
+  assert.deepEqual(run.events,[],'the real key precondition must already be valid');
+  const initialRecordPath=run.api.config.path.record;
+  run.api.config.user.uid=dummyUid; // A prior configured value must not turn native unknown into an accepted account.
+  let failure;
+  try { await run.api.initConfig(); } catch(error) { failure=error; }
+  assert.deepEqual(run.events,['main','uid'],'UI preparation and the native call must both have succeeded');
+  assert.deepEqual(run.uidReads,[0],'the async native source really resolved the unknown sentinel');
+  assert(failure,'native unknown zero must reject initialization rather than accepting record/0.json');
+  assert.match(String(failure.message),/UID|账号|未确认/i);
+  assert.equal(run.api.config.path.record,initialRecordPath,'unknown UID must not construct a record path');
+  assert.equal(run.requests.length,0,'initialization failure must not call reconcile or next-action');
+});
+
+test('canonical native integer and string UIDs keep the same decimal record identity',async()=>{
+  for(const uid of [Number(dummyUid),dummyUid]) {
+    const run=await runtime({cultivation_plan_mode:true,key:'current-revision'},
+      {nativeUid:async()=>uid});
+    await run.api.checkKey('current-revision');
+    await run.api.initConfig();
+    assert.deepEqual(run.events,['main','uid']);
+    assert.equal(run.uidReads.length,1);
+    assert.equal(run.uidReads[0],uid);
+    assert.equal(String(run.api.config.user.uid),dummyUid);
+    assert.equal(run.api.config.path.record,'record/'+dummyUid+'.json');
+    assert.equal(run.requests.length,0);
+  }
 });

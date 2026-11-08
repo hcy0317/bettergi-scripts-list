@@ -6,14 +6,15 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../repo/js/AutoPlan");
-const config = () => ({
+const dummyUid = "123456789";
+const config = (uid = dummyUid) => ({
     bgi_tools: { api: { httpPullJsonConfig: "http://local/auto/plan/json" }, token: {} },
-    user: { uid: "test" }, run: {},
+    user: { uid }, run: {},
 });
 
 async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
-    nextActions = [], craft, returnMain, bench, resinVisible = false, boss, outcomeApi = true, mapResinBridge, captureFrame } = {}) {
-    const logs = [], scans = [], submissions = [], events = [], claims = [], outcomes = [];
+    nextActions = [], craft, returnMain, bench, resinVisible = false, boss, outcomeApi = true, mapResinBridge, captureFrame, userUid = dummyUid, configFirst = false } = {}) {
+    const logs = [], scans = [], submissions = [], events = [], claims = [], outcomes = [], requests = [];
     const actions = [...nextActions];
     let now = 0, crafts = 0;
     class ClockDate extends Date {
@@ -29,7 +30,8 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
     const readImage = name => ({ name });
     const ocr = () => ({ kind: "ocr" });
     const context = vm.createContext({
-        console, settings: {}, Date: ClockDate,
+        console, settings: configFirst ? {cultivation_plan_mode: true, key: "current-revision",
+            bgi_tools_http_pull_json_config: "http://local/auto/plan/json"} : {}, Date: ClockDate,
         taskResult: outcomeApi ? { requireExplicitOutcome() {}, check() {}, report(kind, reason) { outcomes.push({kind, reason}); } } : undefined,
         sleep: async ms => { now += ms; },
         keyPress: async key => { events.push("key:" + key); }, click() {},
@@ -41,6 +43,7 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         captureGameRegion: captureFrame ? () => captureFrame({ imageResult, events }) : (() => ({ width: 1920, height: 1080,
             find: imageResult, findMulti: () => resinVisible ? [{ text: "0/200" }] : [], dispose() {} })),
         genshin: {
+            ...(configFirst ? {uid: async () => { events.push("uid"); return Number(dummyUid); }} : {}),
             returnMainUi: restoreMain, ReturnMainUi: restoreMain, setBigMapZoomLevel: async () => {},
             exitDomain: async () => { events.push("exit-domain"); },
             tpToStatueOfTheSeven: async () => { events.push("statue"); },
@@ -53,7 +56,13 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         log: Object.fromEntries(["info", "warn", "error", "debug"].map(level => [level, (message, ...args) =>
             logs.push(String(message).replace(/\{(\d+)\}/g, (_, index) => String(args[index])))])),
         RecognitionObject: { TemplateMatch: image => ({ image }), Ocr: ocr, ocr },
-        file: { ReadImageMatSync: readImage, readImageMatSync: readImage },
+        file: { ReadImageMatSync: readImage, readImageMatSync: readImage,
+            ...(configFirst ? {readTextSync(name) {
+                if (name === "manifest.json") return JSON.stringify({name: "fixture", version: "0.1.4",
+                    key: "current-revision", last_key: "previous-revision", settings_ui: "settings.json", authors: [{name: "fixture"}]});
+                if (name === "settings.json") return "[]";
+                throw new Error("unexpected configuration IO: " + name);
+            }} : {}) },
         SoloTask: class { constructor(name, param) { this.name = name; this.param = param; } },
         dispatcher: {
             ...(mapResinBridge ? { readMapResin: mapResinBridge } : {}),
@@ -66,6 +75,7 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
                 task.param.iconRecognitionMode === "Item" ? { "霜仙花": 164 } : {};
         }},
         http: { async request(method, url, body) {
+            requests.push({method, url, body});
             if (url.includes("inventory-reconcile-targets")) return { status_code: 200, body: JSON.stringify({
                 code: 200, data: targets ?? { status: "ACTION", actionId: "inventory-1", revision: 1,
                     materialNames: ["霜仙花"], materialNamesByGrid: { Materials: ["霜仙花"] } },
@@ -87,6 +97,10 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         }},
     });
     const modules = new Map();
+    function resolveModule(specifier, parent) {
+        const filename = specifier.endsWith(".js") ? specifier : specifier + ".js";
+        return load(path.resolve(parent.identifier === entryPath ? path.join(root, "utils") : path.dirname(parent.identifier), filename));
+    }
     function load(filename) {
         if (!modules.has(filename)) modules.set(filename, new vm.SourceTextModule(fs.readFileSync(filename, "utf8"), {
             identifier: filename, context,
@@ -95,15 +109,104 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
     }
     const entryPath = process.env.AUTO_PLAN_TEST_SOURCE || path.join(root, "utils/cultivation_plan.js");
     const entry = load(entryPath);
-    await entry.link((specifier, parent) => load(path.resolve(
-        parent.identifier === entryPath ? path.join(root, "utils") : path.dirname(parent.identifier), specifier + ".js")));
-    await entry.evaluate();
-    return { logs, scans, submissions, events, claims, outcomes,
-        reconcile: () => entry.namespace.runCultivationInventoryReconcile(config()),
-        run: () => entry.namespace.runPlanDrivenCultivation(config()),
+    const linkRoot = configFirst ? load(path.join(root, "config/config.js")) : entry;
+    await linkRoot.link(resolveModule);
+    await linkRoot.evaluate();
+    if (configFirst) {
+        await linkRoot.namespace.buildInitConfigSettings();
+        await linkRoot.namespace.initSettings();
+        await linkRoot.namespace.initConfig();
+    }
+    return { logs, scans, submissions, events, claims, outcomes, requests, moduleGraph: modules, linkRoot,
+        reconcile: () => entry.namespace.runCultivationInventoryReconcile(config(userUid)),
+        run: () => entry.namespace.runPlanDrivenCultivation(config(userUid)),
         physical: modules.get(path.join(root, "utils/physical.js")).namespace.Physical,
         handlers: modules.get(path.join(root, "utils/load_check_run.js")).namespace.taskHandlerMap };
 }
+
+test("actual static config initialization evaluates shared task identities and the real handler graph", async () => {
+    const runtime = await createRuntime({configFirst: true});
+    const configModule = runtime.moduleGraph.get(path.join(root, "config/config.js"));
+    const planModule = runtime.moduleGraph.get(path.join(root, "utils/cultivation_plan.js"));
+    const handlersModule = runtime.moduleGraph.get(path.join(root, "utils/load_check_run.js"));
+    const taskTypesModule = runtime.moduleGraph.get(path.join(root, "config/task_types.js"));
+    assert.equal(runtime.linkRoot, configModule, "start with the actual config, not a plan-first shortcut");
+    for (const module of [configModule, planModule, handlersModule, taskTypesModule]) {
+        assert(module instanceof vm.SourceTextModule, "every cycle participant must be actual repository source");
+        assert.equal(module.status, "evaluated");
+    }
+    assert(configModule.dependencySpecifiers.includes("../utils/cultivation_plan"));
+    assert(configModule.dependencySpecifiers.includes("./task_types"));
+    assert(handlersModule.dependencySpecifiers.includes("../config/task_types"));
+    assert(runtime.events.includes("uid"), "the actual native UID adapter must run during initialization");
+    assert(planModule.dependencySpecifiers.includes("./load_check_run"));
+    assert(handlersModule.dependencySpecifiers.includes("../config/config"));
+    assert.equal(typeof planModule.namespace.requireCanonicalUid, "function");
+    const actualConfig = configModule.namespace.config;
+    const expectedTypes = ["秘境", "地脉", "幽境", "Boss"];
+    const defaults = taskTypesModule.namespace.DEFAULT_RUN_TYPES;
+    assert.deepEqual(Array.from(defaults), expectedTypes);
+    assert(Object.isFrozen(defaults));
+    assert.notEqual(actualConfig.user.runTypes, defaults, "config must own its mutable copy");
+    assert.equal(Object.isFrozen(actualConfig.user.runTypes), false);
+    assert.deepEqual(Array.from(actualConfig.user.runTypes), expectedTypes);
+    actualConfig.user.runTypes.push("mutable-fixture");
+    assert.equal(actualConfig.user.runTypes.pop(), "mutable-fixture");
+    assert.deepEqual(Array.from(defaults), expectedTypes);
+    const handlers = handlersModule.namespace.taskHandlerMap;
+    assert.deepEqual(Object.keys(handlers), expectedTypes);
+    assert.deepEqual(expectedTypes.map(type => handlers[type].target),
+        ["autoDomain", "autoLeyLineOutcrop", "autoStygianOnslaught", "autoBoss"]);
+    for (const type of expectedTypes) for (const member of ["build", "buildKey", "run"])
+        assert.equal(typeof handlers[type][member], "function");
+    assert.equal(String(actualConfig.user.uid), dummyUid);
+    assert.equal(actualConfig.path.record, "record/" + dummyUid + ".json");
+    actualConfig.user.uid = Number(dummyUid);
+    actualConfig.bgi_tools.api.httpPullJsonConfig = "http://local/auto/plan/json";
+    await planModule.namespace.runCultivationInventoryReconcile(actualConfig);
+    await planModule.namespace.runPlanDrivenCultivation(actualConfig);
+    assert(runtime.requests.some(request => request.url.includes("inventory-reconcile-targets")));
+    assert(runtime.requests.some(request => request.url.includes("next-action")));
+    for (const request of runtime.requests) {
+        if (request.url.includes("inventory-reconcile-targets") || request.url.includes("next-action"))
+            assert.equal(new URL(request.url).searchParams.get("uid"), dummyUid);
+    }
+    assert(runtime.outcomes.every(result => result.kind !== "Failed"));
+});
+
+for (const entry of ["reconcile", "run"]) {
+    test("actual " + entry + " entry rejects invalid UID before serializing any API request", async () => {
+        for (const uid of [0, false, {}, {toString: () => dummyUid}, "uid-" + dummyUid]) {
+            const runtime = await createRuntime({userUid: uid});
+            assert.equal(typeof runtime[entry], "function", "the existing real module entry must be loaded");
+            let failure;
+            try { await runtime[entry](); } catch (error) { failure = error; }
+            assert.equal(runtime.requests.length, 0, "invalid UID must not reach the real request boundary");
+            assert(failure, "invalid UID must reject the managed invocation");
+            assert.match(String(failure.message), /UID|账号|未确认/i);
+            assert.equal(runtime.outcomes.length, 1);
+            assert.equal(runtime.outcomes[0].kind, "Failed");
+            assert.equal(runtime.scans.length, 0);
+            assert.equal(runtime.claims.length, 0);
+        }
+    });
+}
+
+test("canonical integer and string UIDs retain their exact query identity in both real entries", async () => {
+    for (const uid of [Number(dummyUid), dummyUid]) for (const entry of ["reconcile", "run"]) {
+        const runtime = await createRuntime({userUid: uid});
+        await runtime[entry]();
+        const targets = runtime.requests.filter(request => request.url.includes("inventory-reconcile-targets"));
+        assert(targets.length > 0, "the positive control must reach the real inventory request");
+        for (const request of runtime.requests) {
+            if (request.url.includes("inventory-reconcile-targets") || request.url.includes("next-action"))
+                assert.equal(new URL(request.url).searchParams.get("uid"), dummyUid);
+        }
+        if (entry === "run") assert(runtime.claims.length > 0, "the positive plan control must reach next-action");
+        assert.equal(runtime.outcomes.length, 1);
+        assert.notEqual(runtime.outcomes[0].kind, "Failed");
+    }
+});
 
 test("managed BUSY cannot be reported as a completed script", async () => {
     const runtime = await createRuntime({nextActions: [{status: "BUSY", message: "lease held"}]});
