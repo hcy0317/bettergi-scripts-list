@@ -616,7 +616,33 @@ declare const notification: {
 /**
  * 任务调度器
  */
+/** Optional HCY map-resin extension; feature-detect readMapResin before calling on older clients. */
+interface MapResinRoi { x: number; y: number; width: number; height: number; }
+interface MapResinOcrText { source: CaptureFrameStamp; texts: string[]; }
+interface MapResinSource {
+  isKnown: boolean; sessionId: string; sequence: number;
+  capturedTimestamp: number; timestampFrequency: number; capturedAt: string;
+}
+interface MapResinQuantity {
+  known: boolean; count: number | null; reason: string;
+  roi: MapResinRoi | null; rawText: string[];
+}
+interface MapResinReading {
+  schema: "bgi.map-resin.v1";
+  original: MapResinQuantity; condensed: MapResinQuantity;
+  sourceBefore: MapResinSource; sourceAfter: MapResinSource;
+  readStartedTimestamp: number; readCompletedTimestamp: number; clockFrequency: number;
+  contextUnchanged: boolean; mapObserved: boolean;
+  /** Historical quantity data never grants current keyboard/mouse permission. */
+  inputAuthorized: false;
+}
+
 declare const dispatcher: {
+  /** HCY optional capability; caller owns frame, callback uses only the supplied crop and returns its native stamp. */
+  readMapResin?: (frame: ImageRegion, rois: { original: MapResinRoi | null; condensed: MapResinRoi | null },
+    readText: (crop: ImageRegion, kind: "original" | "condensed") => MapResinOcrText,
+    customCt?: CancellationToken) => MapResinReading;
+  ReadMapResin?: typeof dispatcher.readMapResin;
   /** 外部进度会话协议。必须在任何输入之前探测；同版本旧构建也不可回退。 */
   readCombatSessionProtocol(): "bgi.external-combat.v1";
   ReadCombatSessionProtocol: typeof dispatcher.readCombatSessionProtocol;
