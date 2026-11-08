@@ -1,3 +1,4 @@
+import {DEFAULT_RUN_TYPES} from "../config/task_types";
 import {config, LoadType} from "../config/config";
 function isTerminalTaskError(error) {
     return /BGI_COMBAT_UNCONFIRMED|OperationCanceledException|TaskCanceledException|NormalEndException|UserCancelled|取消|cancelled|canceled/i
@@ -1014,25 +1015,25 @@ class Boss extends Base {
 /*===========================================[load]===========================================*/
 // 任务处理器映射表，放在模块顶层，以便各个函数共享
 export const taskHandlerMap = {
-    [config.user.runTypes[0]]: {
+    [DEFAULT_RUN_TYPES[0]]: {
         build: Domain.build,
         buildKey: Domain.buildKey,
         run: Domain.run,
         target: Domain.key() //'autoDomain'
     },
-    [config.user.runTypes[1]]: {
+    [DEFAULT_RUN_TYPES[1]]: {
         build: LeyLineOutcrop.build,
         buildKey: LeyLineOutcrop.buildKey,
         run: LeyLineOutcrop.run,
         target: LeyLineOutcrop.key() //'autoLeyLineOutcrop'
     },
-    [config.user.runTypes[2]]: {
+    [DEFAULT_RUN_TYPES[2]]: {
         build: StygianOnslaught.build,
         buildKey: StygianOnslaught.buildKey,
         run: StygianOnslaught.run,
         target: StygianOnslaught.key() //'autoStygianOnslaught'
     },
-    [config.user.runTypes[3]]: {
+    [DEFAULT_RUN_TYPES[3]]: {
         build: Boss.build,
         buildKey: Boss.buildKey,
         run: Boss.run,

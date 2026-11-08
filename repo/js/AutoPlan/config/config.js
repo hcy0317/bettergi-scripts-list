@@ -1,4 +1,6 @@
+import {DEFAULT_RUN_TYPES} from "./task_types";
 import {toMainUi} from "../utils/tool";
+import {requireCanonicalUid} from "../utils/cultivation_plan";
 /*===========================================[config]===========================================*/
 const defaultConfig={
     //setting设置放在这个json
@@ -42,7 +44,7 @@ const defaultConfig={
             },
             names: ["原粹树脂", "浓缩树脂", "须臾树脂", "脆弱树脂"]
         },
-        runTypes: ['秘境', '地脉', '幽境','Boss']
+        runTypes: [...DEFAULT_RUN_TYPES]
     },
     //
     path: {
@@ -68,6 +70,7 @@ const defaultConfig={
 }
 
 export let config = defaultConfig
+
 /**
  * 构建记录文件路径的函数
  * @param {string} uid - 用户唯一标识符
@@ -230,9 +233,11 @@ export async function initConfig() {
     // config.user.physical.min = physical.min
     await toMainUi()
     // 初始化uid
-    config.user.uid = await genshin.uid()
+    const nativeUid = await genshin.uid()
+    const uid = requireCanonicalUid(nativeUid)
+    config.user.uid = uid
     // config.run.retry_count = (settings.retry_count ? parseInt(settings.retry_count) : config.run.retry_count)
-    config.path.record = buildRecord(config.user.uid,config.path.record)
+    config.path.record = buildRecord(uid,config.path.record)
     const retryCount = Number.parseInt(String(settings.retry_count ?? ""), 10);
     config.run.retry_count = Number.isFinite(retryCount) && retryCount > 0
         ? retryCount
