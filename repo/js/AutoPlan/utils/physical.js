@@ -276,7 +276,48 @@ export class Physical {
      * 统计浓缩树脂数量
      * @returns {number} 浓缩树脂数量
      */
+    /** HCY optional API: keep the legacy path only when the host capability is absent. */
+    static hasMapResinBridge() {
+        return typeof dispatcher !== "undefined" && typeof dispatcher.readMapResin === "function";
+    }
+
+    static readMapResinFromCurrentFrame() {
+        let frame = null, originalIcon = null, condensedIcon = null;
+        try {
+            frame = captureGameRegion();
+            originalIcon = frame.find(RESIN_ICONS.ORIGINAL);
+            condensedIcon = frame.find(RESIN_ICONS.CONDENSED);
+            const roi = (icon, size) => icon && icon.isExist()
+                ? {x: icon.x, y: icon.y, width: size.width, height: size.height} : null;
+            const observation = dispatcher.readMapResin(frame, {
+                original: roi(originalIcon, CONFIG.OCR_REGIONS.ORIGINAL_RESIN),
+                condensed: roi(condensedIcon, CONFIG.OCR_REGIONS.CONDENSED_RESIN)
+            }, (crop, kind) => {
+                let rows = null;
+                try {
+                    rows = crop.findMulti(RecognitionObject.ocr(0, 0, crop.width, crop.height));
+                    const texts = [];
+                    if (rows) for (const row of rows) if (row && typeof row.text === "string") texts.push(row.text);
+                    return {source: crop.frameStamp, texts};
+                } finally {
+                    if (rows) {
+                        for (const row of rows) if (row && typeof row.dispose === "function") row.dispose();
+                        if (typeof rows.dispose === "function") rows.dispose();
+                    }
+                }
+            });
+            const value = reading => reading?.known === true && Number.isSafeInteger(reading.count) && reading.count >= 0
+                ? reading.count : -1;
+            return {original: value(observation?.original), condensed: value(observation?.condensed), observation};
+        } finally {
+            if (originalIcon && typeof originalIcon.dispose === "function") originalIcon.dispose();
+            if (condensedIcon && typeof condensedIcon.dispose === "function") condensedIcon.dispose();
+            if (frame && typeof frame.dispose === "function") frame.dispose();
+        }
+    }
+
     static async countCondensedResin() {
+        if (Physical.hasMapResinBridge()) return Physical.readMapResinFromCurrentFrame().condensed;
         const condensedResin = await Physical.recognizeImage(RESIN_ICONS.CONDENSED);
         if (!condensedResin) {
             Log.warn(`未找到浓缩树脂图标`);
@@ -397,6 +438,7 @@ export class Physical {
         try {
             // setGameMetrics(1920, 1080, 1); // 设置游戏显示参数
             // Log.info("开始统计树脂数量"); // 记录开始统计的日志
+            let mapResinObservation = null;
             let resinCounts = { // 存储各种树脂数量的对象
                 original: -1, // 负数表示未知，不等于背包为零
                 transient: -1,
@@ -410,8 +452,15 @@ export class Physical {
             await Physical.openMap(); // 打开地图界面
             await sleep(CONFIG.UI_DELAY); // 等待界面加载
             Log.info("开始统计地图界面中的树脂"); // 记录开始统计的日志
-            resinCounts.original = await Physical.countOriginalResinBackup();
-            resinCounts.condensed = await Physical.countCondensedResin(); // 统计浓缩树脂数量
+            if (Physical.hasMapResinBridge()) {
+                const mapCounts = Physical.readMapResinFromCurrentFrame();
+                resinCounts.original = mapCounts.original;
+                resinCounts.condensed = mapCounts.condensed;
+                mapResinObservation = mapCounts.observation;
+            } else {
+                resinCounts.original = await Physical.countOriginalResinBackup();
+                resinCounts.condensed = await Physical.countCondensedResin(); // 旧客户端保持原路径
+            }
             // 背包任务负责退出地图、打开贵重道具页和等待页面稳定，不进入补充/消费界面。
             const inventory = await dispatcher.runTask(new SoloTask("CountInventoryItem", {
                 gridScreenName: "PreciousItems",
@@ -430,12 +479,14 @@ export class Physical {
             Physical.displayResults(resinCounts); // 显示统计结果
 
             Log.info("树脂统计完成"); // 记录完成统计的日志
-            return { // 返回包含各种树脂数量的对象
+            const snapshot = { // 旧客户端保持原四字段形状
                 originalResinCount: resinCounts.original, // 原粹树脂数量
                 condensedResinCount: resinCounts.condensed, // 浓缩树脂数量
                 transientResinCount: resinCounts.transient, // 须臾树脂数量
                 fragileResinCount: resinCounts.fragile // 脆弱树脂数量
             };
+            if (mapResinObservation != null) snapshot.mapResinObservation = mapResinObservation;
+            return snapshot;
 
         } catch (error) { // 捕获异常
             terminalExit = isTerminalTaskError(error);
@@ -513,6 +564,7 @@ export class Physical {
     }
 
     static async countOriginalResinBackup() {
+        if (Physical.hasMapResinBridge()) return Physical.readMapResinFromCurrentFrame().original;
         const originalResin = await Physical.recognizeImage(RESIN_ICONS.ORIGINAL);
         if (!originalResin) {
             Log.warn(`未找到原粹树脂图标`);

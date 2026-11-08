@@ -12,7 +12,7 @@ const config = () => ({
 });
 
 async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
-    nextActions = [], craft, returnMain, bench, resinVisible = false, boss, outcomeApi = true } = {}) {
+    nextActions = [], craft, returnMain, bench, resinVisible = false, boss, outcomeApi = true, mapResinBridge, captureFrame } = {}) {
     const logs = [], scans = [], submissions = [], events = [], claims = [], outcomes = [];
     const actions = [...nextActions];
     let now = 0, crafts = 0;
@@ -38,8 +38,8 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         AutoDomainParam: class { SetResinPriorityList() {} },
         GridScreenName: { CharacterDevelopmentItems: "CharacterDevelopmentItems" },
         ItemIconRecognitionMode: { Item: "Item" },
-        captureGameRegion: () => ({ width: 1920, height: 1080,
-            find: imageResult, findMulti: () => resinVisible ? [{ text: "0/200" }] : [], dispose() {} }),
+        captureGameRegion: captureFrame ? () => captureFrame({ imageResult, events }) : (() => ({ width: 1920, height: 1080,
+            find: imageResult, findMulti: () => resinVisible ? [{ text: "0/200" }] : [], dispose() {} })),
         genshin: {
             returnMainUi: restoreMain, ReturnMainUi: restoreMain, setBigMapZoomLevel: async () => {},
             exitDomain: async () => { events.push("exit-domain"); },
@@ -56,6 +56,7 @@ async function createRuntime({ scan, targets, observationStatus = "REPLANNING",
         file: { ReadImageMatSync: readImage, readImageMatSync: readImage },
         SoloTask: class { constructor(name, param) { this.name = name; this.param = param; } },
         dispatcher: {
+            ...(mapResinBridge ? { readMapResin: mapResinBridge } : {}),
             async RunAutoDomainTask() { events.push("domain"); return {"霜仙花": 1}; },
             async RunAutoBossTask() { events.push("boss"); return boss ? boss() : { "蕈王钩喙": 1 }; },
             async RunCountInventoryItemTask(param) { scans.push({ single: param.ItemName }); return 10; },
@@ -251,6 +252,121 @@ test("resin snapshot reads consumables from the inventory, never the map repleni
     assert.equal(runtime.scans[0].gridScreenName, "PreciousItems");
     assert.deepEqual(Array.from(runtime.scans[0].itemNames), ["须臾树脂", "脆弱树脂"]);
     assert.equal(runtime.scans[0].iconRecognitionMode, "Item");
+});
+
+test("actual physical preserves new-host observations without changing absent-provenance snapshot shape", async () => {
+    // These Node host mocks test JS ownership/envelopes, not CLR source-stamp validation.
+    for (const state of ["known", "unknown", "no-observation"]) {
+        const captures = [];
+        const observation = state === "no-observation" ? null : {
+            schema: "bgi.map-resin.v1",
+            original: { known: state === "known", count: state === "known" ? 120 : null },
+            condensed: { known: true, count: 3 }, sourceBefore: null, sourceAfter: null,
+            inputAuthorized: false,
+        };
+        let ownedFrame, bridgeCalls = 0, rowsDisposed = 0, arraysDisposed = 0;
+        const runtime = await createRuntime({
+            scan: () => ({ "须臾树脂": 2, "脆弱树脂": 37 }),
+            captureFrame: ({ imageResult, events }) => {
+                let scene = "main";
+                for (const event of events) {
+                    if (event === "key:M") scene = "map";
+                    if (event === "main") scene = "main";
+                }
+                const stamp = { fixture: "capture", sequence: captures.length + 1, scene };
+                const frame = { width: 1920, height: 1080, frameStamp: stamp, scene,
+                    disposed: 0, icons: [], mainChecks: [],
+                    find(ro) {
+                        const base = imageResult(ro);
+                        const name = String(ro?.image?.name).toLowerCase();
+                        const paimon = name.includes("paimon");
+                        const resin = name.endsWith("original_resin.png") || name.endsWith("condensed_resin.png");
+                        const exists = (paimon && scene === "main") || (resin && scene === "map");
+                        const result = { ...base, disposed: 0, isExist: () => exists, isEmpty: () => !exists,
+                            dispose() { this.disposed++; } };
+                        if (paimon) frame.mainChecks.push(exists);
+                        if (resin) frame.icons.push(result);
+                        return result;
+                    }, findMulti: () => [], dispose() { this.disposed++; } };
+                captures.push(frame);
+                return frame;
+            },
+            mapResinBridge: (frame, rois, readText) => {
+                bridgeCalls++;
+                ownedFrame = frame;
+                assert.equal(frame.scene, "map");
+                assert(runtime.events.includes("key:M"), "the actual openMap must prepare the map UI");
+                const prelude = captures.find(candidate => candidate !== frame && candidate.scene === "main" && candidate.mainChecks.includes(true));
+                assert(prelude, "the actual toMainUi must confirm a main frame before map reading");
+                assert.equal(prelude.disposed, 1);
+                assert.notEqual(prelude.frameStamp, frame.frameStamp);
+                assert.equal(frame.disposed, 0);
+                assert(rois.original && rois.condensed);
+                assert(frame.icons.every(icon => icon.isExist() && !icon.isEmpty()));
+                if (!observation) return null;
+                observation.sourceBefore = frame.frameStamp;
+                observation.sourceAfter = frame.frameStamp;
+                for (const kind of ["original", "condensed"]) {
+                    const texts = kind === "original" ? (state === "known" ? ["120", "/", "200"] : []) : ["3"];
+                    const rows = texts.map(text => ({ text, dispose() { rowsDisposed++; } }));
+                    rows.dispose = () => { arraysDisposed++; };
+                    const result = readText({ width: rois[kind].width, height: rois[kind].height,
+                        frameStamp: frame.frameStamp, findMulti: () => rows }, kind);
+                    assert.equal(result.source, frame.frameStamp);
+                    assert.deepEqual(Array.from(result.texts), texts);
+                }
+                return observation;
+            },
+        });
+        runtime.physical.countOriginalResinBackup = async () => { throw new Error("new host must not recapture using legacy OCR"); };
+        runtime.physical.countCondensedResin = async () => { throw new Error("new host must not enter legacy condensed fallback"); };
+        const snapshot = await runtime.physical.countAllResin();
+        const expected = { originalResinCount: state === "known" ? 120 : -1,
+            condensedResinCount: observation ? 3 : -1, transientResinCount: 2, fragileResinCount: 37 };
+        if (observation) expected.mapResinObservation = observation;
+        assert.deepEqual(JSON.parse(JSON.stringify(snapshot)), expected);
+        assert.equal(Object.hasOwn(snapshot, "mapResinObservation"), observation !== null);
+        if (observation) assert.equal(snapshot.mapResinObservation, observation);
+        assert.equal(bridgeCalls, 1);
+        // UI preparation/recovery has its own captures; only the resin helper owns this one.
+        assert.equal(captures.filter(frame => frame.icons.length !== 0).length, 1);
+        const afterOwned = captures.filter(frame => frame.frameStamp.sequence > ownedFrame.frameStamp.sequence);
+        assert(afterOwned.some(frame => frame.scene === "map" && frame.mainChecks.includes(false)));
+        assert(afterOwned.some(frame => frame.scene === "main" && frame.mainChecks.includes(true)));
+        assert(captures.every(frame => frame.disposed === 1));
+        assert.equal(ownedFrame.disposed, 1);
+        assert.equal(ownedFrame.icons.length, 2);
+        assert(ownedFrame.icons.every(icon => icon.disposed === 1));
+        assert.equal(arraysDisposed, observation ? 2 : 0);
+        assert.equal(rowsDisposed, state === "known" ? 4 : state === "unknown" ? 1 : 0);
+        assert.equal(runtime.scans.length, 1);
+        assert.equal(runtime.scans[0].gridScreenName, "PreciousItems");
+    }
+});
+
+test("actual physical helper rethrows bridge code errors and still releases its owned frame", async () => {
+    const failure = new Error("map-resin bridge code failed");
+    let captured = 0, ownedFrame;
+    const runtime = await createRuntime({
+        captureFrame: () => {
+            captured++;
+            const frame = { width: 1920, height: 1080, disposed: 0, icons: [],
+                find() {
+                    const icon = { x: 1500, y: 30, disposed: 0, isExist: () => true,
+                        dispose() { this.disposed++; } };
+                    frame.icons.push(icon);
+                    return icon;
+                }, dispose() { this.disposed++; } };
+            return frame;
+        },
+        mapResinBridge: frame => { ownedFrame = frame; throw failure; },
+    });
+    const before = captured;
+    assert.throws(() => runtime.physical.readMapResinFromCurrentFrame(), error => error === failure);
+    assert.equal(captured, before + 1);
+    assert.equal(ownedFrame.disposed, 1);
+    assert.equal(ownedFrame.icons.length, 2);
+    assert(ownedFrame.icons.every(icon => icon.disposed === 1));
 });
 
 test("missing or invalid inventory resin quantities remain unknown", async () => {
