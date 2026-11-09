@@ -361,6 +361,12 @@ declare const genshin: {
    * 返回主界面
    */
   returnMainUi(): Promise<void>;
+  /**
+   * 在同一 10 秒总预算内返回主界面并进入每日委托奖励界面。
+   * 仅在 Native 确认目标界面后完成；超时、取消或其他失败时拒绝并抛出异常。
+   * @since 0.66.3-alpha.1（需实际包含此能力的构建）
+   */
+  enterCommissionScreen(): Promise<void>;
   /** 退出秘境并等待连续新帧确认秘境外主界面；失败或取消时拒绝。 */
   exitDomain(): Promise<void>;
   /**
@@ -418,6 +424,7 @@ declare const genshin: {
   GoToAdventurersGuild: typeof genshin.goToAdventurersGuild;
   GoToCraftingBench: typeof genshin.goToCraftingBench;
   ReturnMainUi: typeof genshin.returnMainUi;
+  EnterCommissionScreen: typeof genshin.enterCommissionScreen;
   ExitDomain: typeof genshin.exitDomain;
   AutoFishing: typeof genshin.autoFishing;
   Relogin: typeof genshin.relogin;

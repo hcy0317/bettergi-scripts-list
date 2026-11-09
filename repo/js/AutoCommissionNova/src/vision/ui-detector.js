@@ -5,41 +5,6 @@
 import { COMMISSION_STATUS, UI_REGIONS } from "../config/index.js";
 import { RO } from "./templates/index.js";
 
-const backgroundInput = new PostMessage();
-
-function tryPhysicalInput(action) {
-    try {
-        action();
-        return true;
-    } catch (error) {
-        return false;
-    }
-}
-
-function tryBackgroundInput(action) {
-    try {
-        action();
-        return true;
-    } catch (error) {
-        return false;
-    }
-}
-
-function pressKeyInBothModes(key) {
-    const messageSent = tryBackgroundInput(() => backgroundInput.keyPress(key));
-    const physicalSent = tryPhysicalInput(() => keyPress(key));
-    if (!messageSent && !physicalSent) {
-        throw new Error(`无法向游戏窗口发送按键: ${key}`);
-    }
-}
-
-function clickInBothModes(x, y) {
-    const physicalSent = tryPhysicalInput(() => click(x, y));
-    if (!physicalSent) {
-        throw new Error(`无法向游戏窗口发送点击: ${x}, ${y}`);
-    }
-}
-
 /**
  * 检测是否在主界面
  *
@@ -100,19 +65,18 @@ export async function detectCommissionStatusByImage(buttonIndex) {
 }
 
 /**
- * 进入委托界面（F1快捷键 + 点击委托标签）
+ * 进入委托界面
  *
- * 通过 F1 键打开冒险之证，并点击委托标签进入委托界面
+ * 由 Native 在同一 10 秒预算内恢复主界面并确认委托奖励页。
  *
  * @returns {Promise<boolean>} 是否成功进入委托界面
  */
 export async function enterCommissionScreen() {
     try {
-        const page = new BvPage();
-
-        await page.locator("委托", UI_REGIONS.COMMISSION_TAB).withRetryAction(() => pressKeyInBothModes("VK_F1")).waitFor();
-
-        await page.locator("每日委托奖励", UI_REGIONS.DAILY_COMMISSION_REWARD).withRetryAction(() => clickInBothModes(300, 350)).waitFor();
+        if (typeof genshin.enterCommissionScreen !== "function") {
+            throw new Error("当前 BetterGI 不支持 genshin.enterCommissionScreen()，请使用包含此入口的 0.66.3-alpha.1 或更高版本构建");
+        }
+        await genshin.enterCommissionScreen();
         log.info("已进入委托界面");
         return true;
     } catch (error) {
